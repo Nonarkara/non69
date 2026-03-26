@@ -9,6 +9,8 @@ export const metadata: Metadata = {
   description: 'Preview of the DrNon cockpit layout and information hierarchy.',
 };
 
+export const dynamic = 'force-dynamic';
+
 const statusOrder: Record<string, number> = {
   high: 0,
   elevated: 1,
