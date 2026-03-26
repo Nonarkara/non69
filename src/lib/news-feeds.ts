@@ -67,7 +67,7 @@ async function fetchAllFeeds(): Promise<NewsItem[]> {
 }
 
 export async function getLiveNewsFeed(): Promise<NewsItem[]> {
-  const cached = getCachedSignalRecord<NewsItem[]>('news-feed', 'global');
+  const cached = await getCachedSignalRecord<NewsItem[]>('news-feed', 'global');
   if (cached && isCacheFresh(cached.fetchedAt, NEWS_CACHE_TTL_MS)) {
     return cached.payload;
   }
@@ -75,7 +75,7 @@ export async function getLiveNewsFeed(): Promise<NewsItem[]> {
   try {
     const items = await fetchAllFeeds();
     if (items.length > 0) {
-      upsertCachedSignalRecord<NewsItem[]>({
+      await upsertCachedSignalRecord<NewsItem[]>({
         slug: 'news-feed',
         area: 'global',
         payload: items,

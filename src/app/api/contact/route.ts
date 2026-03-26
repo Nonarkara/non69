@@ -9,7 +9,7 @@ export async function GET() {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  return Response.json({ requests: listContactRequests() });
+  return Response.json({ requests: await listContactRequests() });
 }
 
 export async function POST(request: Request) {
@@ -27,14 +27,14 @@ export async function POST(request: Request) {
     );
   }
 
-  const id = createContactRequest({
+  const id = await createContactRequest({
     name: body.name,
     email: body.email,
     organization: body.organization,
     useCase: body.useCase,
   });
 
-  trackEvent('contact_request', {
+  await trackEvent('contact_request', {
     id,
     organization: body.organization ?? '',
     timestamp: new Date().toISOString(),

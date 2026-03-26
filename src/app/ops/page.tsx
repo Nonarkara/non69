@@ -30,13 +30,13 @@ export default async function OpsPage() {
     notFound();
   }
 
-  const leadStats = getContactRequestStats();
-  const profileStats = getProfileStats(user.id);
-  const challengeStreak = getChallengeStreak(user.id);
-  const contactRequests = listContactRequests(12);
-  const team = listUsersForAdmin();
-  const recentSessions = listConversationsForUser(user.id).slice(0, 4);
-  const savedItems = listSavedWatchItemsForUser(user.id).slice(0, 4);
+  const leadStats = await getContactRequestStats();
+  const profileStats = await getProfileStats(user.id);
+  const challengeStreak = await getChallengeStreak(user.id);
+  const contactRequests = await listContactRequests(12);
+  const team = await listUsersForAdmin();
+  const recentSessions = (await listConversationsForUser(user.id)).slice(0, 4);
+  const savedItems = (await listSavedWatchItemsForUser(user.id)).slice(0, 4);
 
   return (
     <main className="flex-1">

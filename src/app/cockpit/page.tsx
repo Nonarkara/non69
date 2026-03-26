@@ -140,22 +140,22 @@ export default async function CockpitPage({
     redirect('/access?next=/cockpit');
   }
 
-  const bundle = getWatchBundle('th');
+  const bundle = await getWatchBundle('th');
   if (!bundle) {
     redirect('/watch');
   }
 
   const isAdmin = isAdminUser(user);
-  const revisions = listWatchRevisions('th');
+  const revisions = await listWatchRevisions('th');
   const liveAir = await getLiveAirQuality('bangkok');
-  const conversations = listConversationsForUser(user.id).slice(0, 5);
-  const savedItems = listSavedWatchItemsForUser(user.id).slice(0, 5);
-  const practiceRuns = listPracticeRunsForUser(user.id, 5);
-  const profileStats = getProfileStats(user.id);
-  const challengeStreak = getChallengeStreak(user.id);
-  const meetingSessions = listMeetingSessionsForUser(user.id, 5);
-  const contactStats = isAdmin ? getContactRequestStats() : null;
-  const contactRequests = isAdmin ? listContactRequests(5) : [];
+  const conversations = (await listConversationsForUser(user.id)).slice(0, 5);
+  const savedItems = (await listSavedWatchItemsForUser(user.id)).slice(0, 5);
+  const practiceRuns = await listPracticeRunsForUser(user.id, 5);
+  const profileStats = await getProfileStats(user.id);
+  const challengeStreak = await getChallengeStreak(user.id);
+  const meetingSessions = await listMeetingSessionsForUser(user.id, 5);
+  const contactStats = isAdmin ? await getContactRequestStats() : null;
+  const contactRequests = isAdmin ? await listContactRequests(5) : [];
 
   const currentRevision = revisions[0] ?? null;
   const sortedSignals = [...bundle.signals].sort(

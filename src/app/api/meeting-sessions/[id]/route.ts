@@ -8,7 +8,7 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const user = getUserFromRequest(request);
+  const user = await getUserFromRequest(request);
   if (!user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -19,7 +19,7 @@ export async function GET(
     return Response.json({ error: 'Invalid meeting session id.' }, { status: 400 });
   }
 
-  const session = getMeetingSessionByIdForUser(user.id, sessionId);
+  const session = await getMeetingSessionByIdForUser(user.id, sessionId);
   if (!session) {
     return Response.json({ error: 'Meeting session not found.' }, { status: 404 });
   }

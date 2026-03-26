@@ -1,11 +1,18 @@
-import Database from 'better-sqlite3';
-import path from 'path';
+import { createClient, type Client, type Row } from '@libsql/client';
 import fs from 'fs';
+import path from 'path';
 
-const DB_PATH = path.join(process.cwd(), 'db', 'non69.db');
-const SCHEMA_PATH = path.join(process.cwd(), 'db', 'schema.sql');
+let client: Client | undefined;
 
-let db: Database.Database | undefined;
+export function getClient(): Client {
+  if (!client) {
+    client = createClient({
+      url: process.env.TURSO_DATABASE_URL || 'file:db/non69.db',
+      authToken: process.env.TURSO_AUTH_TOKEN,
+    });
+  }
+  return client;
+}
 
 export type ConversationMode = 'think' | 'communicate' | 'reflect';
 
@@ -183,42 +190,36 @@ const WATCH_STATUS_ORDER: Record<string, number> = {
   mixed: 4,
 };
 
-export function getDb(): Database.Database {
-  if (!db) {
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
+// ---------- initDb: schema + migrations + seeds ----------
 
-    // Initialize schema
-    const schema = fs.readFileSync(SCHEMA_PATH, 'utf-8');
-    db.exec(schema);
-    runMigrations(db);
+export async function initDb() {
+  const c = getClient();
+  const schemaPath = path.join(process.cwd(), 'db', 'schema.sql');
+  const schema = fs.readFileSync(schemaPath, 'utf-8');
+  await c.executeMultiple(schema);
+  await runMigrations(c);
 
-    // Seed Nonisms if empty
-    const count = db.prepare('SELECT COUNT(*) as c FROM nonisms').get() as { c: number };
-    if (count.c === 0) {
-      seedNonisms(db);
-    }
-
-    const watchSignalCount = db
-      .prepare('SELECT COUNT(*) as c FROM watch_signals WHERE geography = ?')
-      .get('th') as { c: number };
-    if (watchSignalCount.c === 0) {
-      seedWatchData(db);
-    }
+  // Seed Nonisms if empty
+  const { rows: countRows } = await c.execute('SELECT COUNT(*) as c FROM nonisms');
+  if (Number(countRows[0].c) === 0) {
+    await seedNonisms(c);
   }
-  return db;
+
+  const { rows: watchRows } = await c.execute({
+    sql: 'SELECT COUNT(*) as c FROM watch_signals WHERE geography = ?',
+    args: ['th'],
+  });
+  if (Number(watchRows[0].c) === 0) {
+    await seedWatchData(c);
+  }
 }
 
-function runMigrations(db: Database.Database) {
-  ensureColumn(db, 'users', 'is_admin', 'INTEGER NOT NULL DEFAULT 0');
+async function runMigrations(database: Client) {
+  await ensureColumn(database, 'users', 'is_admin', 'INTEGER NOT NULL DEFAULT 0');
 
-  const adminCount = db.prepare('SELECT COUNT(*) as c FROM users WHERE is_admin = 1').get() as {
-    c: number;
-  };
-
-  if (adminCount.c === 0) {
-    db.prepare(
+  const { rows } = await database.execute('SELECT COUNT(*) as c FROM users WHERE is_admin = 1');
+  if (Number(rows[0].c) === 0) {
+    await database.execute(
       `UPDATE users
        SET is_admin = 1
        WHERE id = (
@@ -227,33 +228,39 @@ function runMigrations(db: Database.Database) {
          ORDER BY id ASC
          LIMIT 1
        )`
-    ).run();
+    );
   }
 }
 
-function ensureColumn(
-  db: Database.Database,
+async function ensureColumn(
+  database: Client,
   tableName: string,
   columnName: string,
   columnDefinition: string
 ) {
-  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
-  if (columns.some(column => column.name === columnName)) {
+  const { rows: columns } = await database.execute(`PRAGMA table_info(${tableName})`);
+  if (columns.some(column => String(column.name) === columnName)) {
     return;
   }
 
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
+  await database.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
 }
 
-function getWatchSignalDefinitions(database: Database.Database, geography: string): WatchSignalDefinition[] {
-  return database
-    .prepare(
-      `SELECT id, slug, title, sort_order as sortOrder
+async function getWatchSignalDefinitions(database: Client, geography: string): Promise<WatchSignalDefinition[]> {
+  const { rows } = await database.execute({
+    sql: `SELECT id, slug, title, sort_order as sortOrder
        FROM watch_signals
        WHERE geography = ? AND active = 1
-       ORDER BY sort_order ASC, id ASC`
-    )
-    .all(geography) as WatchSignalDefinition[];
+       ORDER BY sort_order ASC, id ASC`,
+    args: [geography],
+  });
+
+  return rows.map(row => ({
+    id: Number(row.id),
+    slug: String(row.slug),
+    title: String(row.title),
+    sortOrder: Number(row.sortOrder),
+  }));
 }
 
 export function computeWatchStatusSummary(
@@ -309,7 +316,7 @@ function parseWatchStatusSummary(raw: string): WatchStatusSummary {
   };
 }
 
-function seedNonisms(db: Database.Database) {
+async function seedNonisms(database: Client) {
   const nonisms = [
     {
       text: "The power of logic is limitless. Sometimes the will alone cannot save you from yourself, but the power of logic will.",
@@ -403,16 +410,15 @@ function seedNonisms(db: Database.Database) {
     }
   ];
 
-  const stmt = db.prepare(
-    'INSERT INTO nonisms (text, source, category, trigger_keywords) VALUES (?, ?, ?, ?)'
-  );
-
   for (const n of nonisms) {
-    stmt.run(n.text, n.source, n.category, n.trigger_keywords);
+    await database.execute({
+      sql: 'INSERT INTO nonisms (text, source, category, trigger_keywords) VALUES (?, ?, ?, ?)',
+      args: [n.text, n.source, n.category, n.trigger_keywords],
+    });
   }
 }
 
-function seedWatchData(db: Database.Database) {
+async function seedWatchData(database: Client) {
   const signals = [
     {
       geography: 'th',
@@ -542,83 +548,71 @@ function seedWatchData(db: Database.Database) {
     },
   ];
 
-  const signalStmt = db.prepare(
-    `INSERT INTO watch_signals (geography, slug, title, description, sort_order)
-     VALUES (?, ?, ?, ?, ?)`
-  );
-  const snapshotStmt = db.prepare(
-    `INSERT INTO watch_snapshots
-      (signal_id, geography, status, summary, why_it_matters, what_to_do, metric_text, trend_text, sources, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-
   for (const signal of signals) {
-    const result = signalStmt.run(
-      signal.geography,
-      signal.slug,
-      signal.title,
-      signal.description,
-      signal.sortOrder
-    );
+    const result = await database.execute({
+      sql: `INSERT INTO watch_signals (geography, slug, title, description, sort_order)
+       VALUES (?, ?, ?, ?, ?)`,
+      args: [signal.geography, signal.slug, signal.title, signal.description, signal.sortOrder],
+    });
 
-    snapshotStmt.run(
-      result.lastInsertRowid,
-      signal.geography,
-      signal.status,
-      signal.summary,
-      signal.whyItMatters,
-      signal.whatToDo,
-      signal.metricText,
-      signal.trendText,
-      JSON.stringify(signal.sources),
-      signal.updatedAt
-    );
+    await database.execute({
+      sql: `INSERT INTO watch_snapshots
+        (signal_id, geography, status, summary, why_it_matters, what_to_do, metric_text, trend_text, sources, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        Number(result.lastInsertRowid),
+        signal.geography,
+        signal.status,
+        signal.summary,
+        signal.whyItMatters,
+        signal.whatToDo,
+        signal.metricText,
+        signal.trendText,
+        JSON.stringify(signal.sources),
+        signal.updatedAt,
+      ],
+    });
   }
 
-  db.prepare(
-    `INSERT INTO watch_briefs (geography, headline, summary, watchouts, updated_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(
-    'th',
-    'Thailand Watch: daily urban friction is up, but the useful story is where it bites first.',
-    'Air, heat, and everyday service reliability are the big pressure points today. Nothing here is cinematic. That is exactly why it matters. The signal is in repeat irritation, reduced resilience, and the small failures that citizens absorb as normal.',
-    JSON.stringify([
-      'Morning air quality remains the easiest self-own if you leave home unprepared.',
-      'Heat is turning ordinary errands into physiological stress tests.',
-      'Localized weather and maintenance failures still punish people who trust the system too much.',
-    ]),
-    '2026-03-24T08:30:00+07:00'
-  );
+  await database.execute({
+    sql: `INSERT INTO watch_briefs (geography, headline, summary, watchouts, updated_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    args: [
+      'th',
+      'Thailand Watch: daily urban friction is up, but the useful story is where it bites first.',
+      'Air, heat, and everyday service reliability are the big pressure points today. Nothing here is cinematic. That is exactly why it matters. The signal is in repeat irritation, reduced resilience, and the small failures that citizens absorb as normal.',
+      JSON.stringify([
+        'Morning air quality remains the easiest self-own if you leave home unprepared.',
+        'Heat is turning ordinary errands into physiological stress tests.',
+        'Localized weather and maintenance failures still punish people who trust the system too much.',
+      ]),
+      '2026-03-24T08:30:00+07:00',
+    ],
+  });
 }
 
 // Analytics: track events for the self-improving algorithm
-export function trackEvent(eventType: string, data: Record<string, unknown>) {
-  const db = getDb();
-  db.prepare('INSERT INTO analytics (event_type, data) VALUES (?, ?)').run(
-    eventType,
-    JSON.stringify(data)
-  );
+export async function trackEvent(eventType: string, data: Record<string, unknown>) {
+  await getClient().execute({
+    sql: 'INSERT INTO analytics (event_type, data) VALUES (?, ?)',
+    args: [eventType, JSON.stringify(data)],
+  });
 }
 
 // Get a contextual Nonism based on keywords
-export function getRelevantNonism(text: string): { text: string; source: string } | null {
-  const db = getDb();
-  const nonisms = db.prepare('SELECT * FROM nonisms').all() as Array<{
-    text: string;
-    source: string;
-    trigger_keywords: string;
-  }>;
+export async function getRelevantNonism(text: string): Promise<{ text: string; source: string } | null> {
+  const { rows } = await getClient().execute('SELECT * FROM nonisms');
 
   const words = text.toLowerCase();
   let bestMatch: { text: string; source: string } | null = null;
   let bestScore = 0;
 
-  for (const n of nonisms) {
-    const keywords = JSON.parse(n.trigger_keywords) as string[];
+  for (const n of rows) {
+    const keywords = JSON.parse(String(n.trigger_keywords)) as string[];
     const score = keywords.filter(k => words.includes(k)).length;
     if (score > bestScore) {
       bestScore = score;
-      bestMatch = { text: n.text, source: n.source };
+      bestMatch = { text: String(n.text), source: String(n.source) };
     }
   }
 
@@ -631,189 +625,151 @@ function buildConversationTitle(messages: ChatTranscriptMessage[]) {
   return normalized.length > 72 ? `${normalized.slice(0, 69)}...` : normalized;
 }
 
-export function createConversation(
+export async function createConversation(
   userId: number,
   mode: ConversationMode,
   messages: ChatTranscriptMessage[]
-) {
-  const db = getDb();
+): Promise<number> {
+  const c = getClient();
   const title = buildConversationTitle(messages);
-  const result = db
-    .prepare(
-      `INSERT INTO conversations (user_id, mode, title, messages)
-       VALUES (?, ?, ?, ?)`
-    )
-    .run(userId, mode, title, JSON.stringify(messages));
+  const result = await c.execute({
+    sql: `INSERT INTO conversations (user_id, mode, title, messages)
+       VALUES (?, ?, ?, ?)`,
+    args: [userId, mode, title, JSON.stringify(messages)],
+  });
 
-  db.prepare(
-    `UPDATE users
+  await c.execute({
+    sql: `UPDATE users
      SET total_sessions = total_sessions + 1, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
-  ).run(userId);
+     WHERE id = ?`,
+    args: [userId],
+  });
 
   return Number(result.lastInsertRowid);
 }
 
-export function updateConversation(
+export async function updateConversation(
   userId: number,
   conversationId: number,
   mode: ConversationMode,
   messages: ChatTranscriptMessage[]
-) {
-  const db = getDb();
+): Promise<number | null> {
   const title = buildConversationTitle(messages);
-  const result = db
-    .prepare(
-      `UPDATE conversations
+  const result = await getClient().execute({
+    sql: `UPDATE conversations
        SET mode = ?, title = ?, messages = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND user_id = ?`
-    )
-    .run(mode, title, JSON.stringify(messages), conversationId, userId);
+       WHERE id = ? AND user_id = ?`,
+    args: [mode, title, JSON.stringify(messages), conversationId, userId],
+  });
 
-  return result.changes > 0 ? conversationId : null;
+  return result.rowsAffected > 0 ? conversationId : null;
 }
 
-export function listConversationsForUser(userId: number): ConversationSummary[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT id, mode, title, messages, created_at, updated_at
+export async function listConversationsForUser(userId: number): Promise<ConversationSummary[]> {
+  const { rows } = await getClient().execute({
+    sql: `SELECT id, mode, title, messages, created_at, updated_at
        FROM conversations
        WHERE user_id = ?
-       ORDER BY updated_at DESC, id DESC`
-    )
-    .all(userId) as Array<{
-    id: number;
-    mode: ConversationMode;
-    title: string;
-    messages: string;
-    created_at: string;
-    updated_at: string;
-  }>;
+       ORDER BY updated_at DESC, id DESC`,
+    args: [userId],
+  });
 
   return rows.map(row => {
-    const messages = JSON.parse(row.messages) as ChatTranscriptMessage[];
+    const messages = JSON.parse(String(row.messages)) as ChatTranscriptMessage[];
     const assistantMessage = [...messages].reverse().find(message => message.role === 'assistant');
     const preview = (assistantMessage?.content ?? messages[0]?.content ?? '').replace(/\s+/g, ' ').trim();
 
     return {
-      id: row.id,
-      mode: row.mode,
-      title: row.title,
+      id: Number(row.id),
+      mode: String(row.mode) as ConversationMode,
+      title: String(row.title),
       preview: preview.length > 180 ? `${preview.slice(0, 177)}...` : preview,
       messageCount: messages.length,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
     };
   });
 }
 
-export function getConversationByIdForUser(userId: number, conversationId: number) {
-  const db = getDb();
-  const row = db
-    .prepare(
-      `SELECT id, mode, title, messages, created_at, updated_at
+export async function getConversationByIdForUser(userId: number, conversationId: number) {
+  const { rows } = await getClient().execute({
+    sql: `SELECT id, mode, title, messages, created_at, updated_at
        FROM conversations
-       WHERE id = ? AND user_id = ?`
-    )
-    .get(conversationId, userId) as
-    | {
-        id: number;
-        mode: ConversationMode;
-        title: string;
-        messages: string;
-        created_at: string;
-        updated_at: string;
-      }
-    | undefined;
+       WHERE id = ? AND user_id = ?`,
+    args: [conversationId, userId],
+  });
 
+  const row = rows[0];
   if (!row) {
     return null;
   }
 
   return {
-    id: row.id,
-    mode: row.mode,
-    title: row.title,
-    messages: JSON.parse(row.messages) as ChatTranscriptMessage[],
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    id: Number(row.id),
+    mode: String(row.mode) as ConversationMode,
+    title: String(row.title),
+    messages: JSON.parse(String(row.messages)) as ChatTranscriptMessage[],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
   };
 }
 
-export function getProfileStats(userId: number) {
-  const db = getDb();
-  const totals = db
-    .prepare(
-      `SELECT
+export async function getProfileStats(userId: number) {
+  const c = getClient();
+
+  const { rows: totalRows } = await c.execute({
+    sql: `SELECT
          COUNT(*) as conversationCount,
          SUM(CASE WHEN mode = 'think' THEN 1 ELSE 0 END) as thinkCount,
          SUM(CASE WHEN mode = 'communicate' THEN 1 ELSE 0 END) as communicateCount,
          SUM(CASE WHEN mode = 'reflect' THEN 1 ELSE 0 END) as reflectCount
        FROM conversations
-       WHERE user_id = ?`
-    )
-    .get(userId) as {
-    conversationCount: number;
-    thinkCount: number;
-    communicateCount: number;
-    reflectCount: number;
-  };
+       WHERE user_id = ?`,
+    args: [userId],
+  });
+  const totals = totalRows[0];
 
-  const saved = db
-    .prepare('SELECT COUNT(*) as savedCount FROM saved_watch_items WHERE user_id = ?')
-    .get(userId) as { savedCount: number };
+  const { rows: savedRows } = await c.execute({
+    sql: 'SELECT COUNT(*) as savedCount FROM saved_watch_items WHERE user_id = ?',
+    args: [userId],
+  });
 
-  const practice = db
-    .prepare(
-      `SELECT
+  const { rows: practiceRows } = await c.execute({
+    sql: `SELECT
          COUNT(*) as practiceCount,
          SUM(CASE WHEN tool = 'challenge' THEN 1 ELSE 0 END) as challengeCount,
          SUM(CASE WHEN tool = 'arena' THEN 1 ELSE 0 END) as arenaCount,
          SUM(CASE WHEN tool = 'simulate' THEN 1 ELSE 0 END) as simulateCount
        FROM practice_runs
-       WHERE user_id = ?`
-    )
-    .get(userId) as {
-    practiceCount: number;
-    challengeCount: number;
-    arenaCount: number;
-    simulateCount: number;
-  };
+       WHERE user_id = ?`,
+    args: [userId],
+  });
+  const practice = practiceRows[0];
 
   return {
-    conversationCount: totals.conversationCount,
-    thinkCount: totals.thinkCount,
-    communicateCount: totals.communicateCount,
-    reflectCount: totals.reflectCount,
-    savedCount: saved.savedCount,
-    practiceCount: practice.practiceCount,
-    challengeCount: practice.challengeCount,
-    arenaCount: practice.arenaCount,
-    simulateCount: practice.simulateCount,
+    conversationCount: Number(totals.conversationCount),
+    thinkCount: Number(totals.thinkCount),
+    communicateCount: Number(totals.communicateCount),
+    reflectCount: Number(totals.reflectCount),
+    savedCount: Number(savedRows[0].savedCount),
+    practiceCount: Number(practice.practiceCount),
+    challengeCount: Number(practice.challengeCount),
+    arenaCount: Number(practice.arenaCount),
+    simulateCount: Number(practice.simulateCount),
   };
 }
 
-function getWatchBundleFromDb(database: Database.Database, geography: string): WatchBundle | null {
-  const briefRow = database
-    .prepare(
-      `SELECT geography, headline, summary, watchouts, updated_at
+async function getWatchBundleFromDb(database: Client, geography: string): Promise<WatchBundle | null> {
+  const { rows: briefRows } = await database.execute({
+    sql: `SELECT geography, headline, summary, watchouts, updated_at
        FROM watch_briefs
-       WHERE geography = ?`
-    )
-    .get(geography) as
-    | {
-        geography: string;
-        headline: string;
-        summary: string;
-        watchouts: string;
-        updated_at: string;
-      }
-    | undefined;
+       WHERE geography = ?`,
+    args: [geography],
+  });
+  const briefRow = briefRows[0];
 
-  const signalRows = database
-    .prepare(
-      `SELECT
+  const { rows: signalRows } = await database.execute({
+    sql: `SELECT
          ws.slug,
          ws.title,
          snap.status,
@@ -828,20 +784,9 @@ function getWatchBundleFromDb(database: Database.Database, geography: string): W
        JOIN watch_snapshots snap
          ON snap.signal_id = ws.id AND snap.geography = ws.geography
        WHERE ws.geography = ? AND ws.active = 1
-       ORDER BY ws.sort_order ASC, ws.id ASC`
-    )
-    .all(geography) as Array<{
-    slug: string;
-    title: string;
-    status: string;
-    summary: string;
-    why_it_matters: string;
-    what_to_do: string;
-    metric_text: string;
-    trend_text: string;
-    sources: string;
-    updated_at: string;
-  }>;
+       ORDER BY ws.sort_order ASC, ws.id ASC`,
+    args: [geography],
+  });
 
   if (!briefRow || signalRows.length === 0) {
     return null;
@@ -849,24 +794,24 @@ function getWatchBundleFromDb(database: Database.Database, geography: string): W
 
   return {
     geography,
-    generatedAt: briefRow.updated_at,
+    generatedAt: String(briefRow.updated_at),
     brief: {
-      headline: briefRow.headline,
-      summary: briefRow.summary,
-      watchouts: JSON.parse(briefRow.watchouts) as string[],
-      updatedAt: briefRow.updated_at,
+      headline: String(briefRow.headline),
+      summary: String(briefRow.summary),
+      watchouts: JSON.parse(String(briefRow.watchouts)) as string[],
+      updatedAt: String(briefRow.updated_at),
     },
     signals: signalRows.map(row => ({
-      slug: row.slug,
-      title: row.title,
-      status: row.status,
-      summary: row.summary,
-      whyItMatters: row.why_it_matters,
-      whatToDo: row.what_to_do,
-      updatedAt: row.updated_at,
-      sources: JSON.parse(row.sources) as WatchSource[],
-      metricText: row.metric_text,
-      trendText: row.trend_text,
+      slug: String(row.slug),
+      title: String(row.title),
+      status: String(row.status),
+      summary: String(row.summary),
+      whyItMatters: String(row.why_it_matters),
+      whatToDo: String(row.what_to_do),
+      updatedAt: String(row.updated_at),
+      sources: JSON.parse(String(row.sources)) as WatchSource[],
+      metricText: String(row.metric_text),
+      trendText: String(row.trend_text),
     })),
   };
 }
@@ -988,49 +933,50 @@ function parseWatchBundleSnapshot(snapshot: string, geography?: string): WatchBu
   };
 }
 
-function createWatchRevisionInDb(
-  database: Database.Database,
+async function createWatchRevisionInDb(
+  database: Client,
   input: CreateWatchRevisionInput
-): WatchRevisionSummary {
+): Promise<WatchRevisionSummary> {
   const statusSummary = computeWatchStatusSummary(input.snapshot.signals);
-  const versionRow = database
-    .prepare(
-      `SELECT COALESCE(MAX(version), 0) + 1 as nextVersion
+  const { rows: versionRows } = await database.execute({
+    sql: `SELECT COALESCE(MAX(version), 0) + 1 as nextVersion
        FROM watch_revisions
-       WHERE geography = ?`
-    )
-    .get(input.geography) as { nextVersion: number };
+       WHERE geography = ?`,
+    args: [input.geography],
+  });
+  const nextVersion = Number(versionRows[0].nextVersion);
   const createdAt = input.createdAt ?? input.snapshot.generatedAt;
-  const restoredFromRevisionVersion = input.restoredFromRevisionId
-    ? (
-        database
-          .prepare('SELECT version FROM watch_revisions WHERE id = ?')
-          .get(input.restoredFromRevisionId) as { version: number } | undefined
-      )?.version ?? null
-    : null;
 
-  const result = database
-    .prepare(
-      `INSERT INTO watch_revisions
+  let restoredFromRevisionVersion: number | null = null;
+  if (input.restoredFromRevisionId) {
+    const { rows: sourceRows } = await database.execute({
+      sql: 'SELECT version FROM watch_revisions WHERE id = ?',
+      args: [input.restoredFromRevisionId],
+    });
+    restoredFromRevisionVersion = sourceRows[0] ? Number(sourceRows[0].version) : null;
+  }
+
+  const result = await database.execute({
+    sql: `INSERT INTO watch_revisions
         (geography, version, action, snapshot, headline, status_summary, actor_user_id, restored_from_revision_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
       input.geography,
-      versionRow.nextVersion,
+      nextVersion,
       input.action,
       JSON.stringify(input.snapshot),
       input.snapshot.brief.headline,
       JSON.stringify(statusSummary),
       input.actorUserId,
       input.restoredFromRevisionId ?? null,
-      createdAt
-    );
+      createdAt,
+    ],
+  });
 
   return {
     id: Number(result.lastInsertRowid),
     geography: input.geography,
-    version: versionRow.nextVersion,
+    version: nextVersion,
     action: input.action,
     headline: input.snapshot.brief.headline,
     statusSummary,
@@ -1044,17 +990,16 @@ function createWatchRevisionInDb(
   };
 }
 
-export function createWatchRevision(input: CreateWatchRevisionInput): WatchRevisionSummary {
-  return createWatchRevisionInDb(getDb(), input);
+export async function createWatchRevision(input: CreateWatchRevisionInput): Promise<WatchRevisionSummary> {
+  return createWatchRevisionInDb(getClient(), input);
 }
 
-function getWatchRevisionByIdInDb(
-  database: Database.Database,
+async function getWatchRevisionByIdInDb(
+  database: Client,
   revisionId: number
-): WatchRevision | null {
-  const row = database
-    .prepare(
-      `SELECT
+): Promise<WatchRevision | null> {
+  const { rows } = await database.execute({
+    sql: `SELECT
          wr.id,
          wr.geography,
          wr.version,
@@ -1072,56 +1017,42 @@ function getWatchRevisionByIdInDb(
          ON u.id = wr.actor_user_id
        LEFT JOIN watch_revisions source
          ON source.id = wr.restored_from_revision_id
-       WHERE wr.id = ?`
-    )
-    .get(revisionId) as
-    | {
-        id: number;
-        geography: string;
-        version: number;
-        action: WatchRevisionAction;
-        snapshot: string;
-        headline: string;
-        status_summary: string;
-        actor_user_id: number;
-        restored_from_revision_id: number | null;
-        created_at: string;
-        actor_display_name: string | null;
-        restored_from_revision_version: number | null;
-      }
-    | undefined;
+       WHERE wr.id = ?`,
+    args: [revisionId],
+  });
 
+  const row = rows[0];
   if (!row) {
     return null;
   }
 
   return {
-    id: row.id,
-    geography: row.geography,
-    version: row.version,
-    action: row.action,
-    headline: row.headline,
-    statusSummary: parseWatchStatusSummary(row.status_summary),
+    id: Number(row.id),
+    geography: String(row.geography),
+    version: Number(row.version),
+    action: String(row.action) as WatchRevisionAction,
+    headline: String(row.headline),
+    statusSummary: parseWatchStatusSummary(String(row.status_summary)),
     actor: {
-      id: row.actor_user_id,
-      displayName: row.actor_display_name ?? 'Unknown admin',
+      id: Number(row.actor_user_id),
+      displayName: row.actor_display_name ? String(row.actor_display_name) : 'Unknown admin',
     },
-    actorUserId: row.actor_user_id,
-    restoredFromRevisionId: row.restored_from_revision_id,
-    restoredFromRevisionVersion: row.restored_from_revision_version,
-    createdAt: row.created_at,
-    snapshot: parseWatchBundleSnapshot(row.snapshot, row.geography),
+    actorUserId: Number(row.actor_user_id),
+    restoredFromRevisionId: row.restored_from_revision_id != null ? Number(row.restored_from_revision_id) : null,
+    restoredFromRevisionVersion: row.restored_from_revision_version != null ? Number(row.restored_from_revision_version) : null,
+    createdAt: String(row.created_at),
+    snapshot: parseWatchBundleSnapshot(String(row.snapshot), String(row.geography)),
   };
 }
 
-function applyWatchBundleState(
-  database: Database.Database,
+async function applyWatchBundleState(
+  database: Client,
   geography: string,
   brief: WatchBriefInput,
   signals: WatchSignalInput[],
   timestamp: string
 ) {
-  const definitions = getWatchSignalDefinitions(database, geography);
+  const definitions = await getWatchSignalDefinitions(database, geography);
   if (definitions.length === 0) {
     throw new Error('Watch signal definitions not found.');
   }
@@ -1135,20 +1066,25 @@ function applyWatchBundleState(
     throw new Error('Duplicate watch signal slugs.');
   }
 
-  const briefResult = database
-    .prepare(
-      `UPDATE watch_briefs
+  const briefResult = await database.execute({
+    sql: `UPDATE watch_briefs
        SET headline = ?, summary = ?, watchouts = ?, updated_at = ?
-       WHERE geography = ?`
-    )
-    .run(brief.headline, brief.summary, JSON.stringify(brief.watchouts), timestamp, geography);
+       WHERE geography = ?`,
+    args: [brief.headline, brief.summary, JSON.stringify(brief.watchouts), timestamp, geography],
+  });
 
-  if (briefResult.changes === 0) {
+  if (briefResult.rowsAffected === 0) {
     throw new Error('Watch brief not found.');
   }
 
-  const updateSnapshot = database.prepare(
-    `UPDATE watch_snapshots
+  for (const signal of signals) {
+    const definition = definitionBySlug.get(signal.slug);
+    if (!definition) {
+      throw new Error(`Unknown signal slug: ${signal.slug}`);
+    }
+
+    const result = await database.execute({
+      sql: `UPDATE watch_snapshots
      SET status = ?,
          summary = ?,
          why_it_matters = ?,
@@ -1157,36 +1093,29 @@ function applyWatchBundleState(
          trend_text = ?,
          sources = ?,
          updated_at = ?
-     WHERE signal_id = ? AND geography = ?`
-  );
+     WHERE signal_id = ? AND geography = ?`,
+      args: [
+        signal.status,
+        signal.summary,
+        signal.whyItMatters,
+        signal.whatToDo,
+        signal.metricText,
+        signal.trendText,
+        JSON.stringify(signal.sources),
+        timestamp,
+        definition.id,
+        geography,
+      ],
+    });
 
-  for (const signal of signals) {
-    const definition = definitionBySlug.get(signal.slug);
-    if (!definition) {
-      throw new Error(`Unknown signal slug: ${signal.slug}`);
-    }
-
-    const result = updateSnapshot.run(
-      signal.status,
-      signal.summary,
-      signal.whyItMatters,
-      signal.whatToDo,
-      signal.metricText,
-      signal.trendText,
-      JSON.stringify(signal.sources),
-      timestamp,
-      definition.id,
-      geography
-    );
-
-    if (result.changes === 0) {
+    if (result.rowsAffected === 0) {
       throw new Error(`Watch snapshot missing for signal: ${signal.slug}`);
     }
   }
 }
 
-function publishWatchBundleInDb(
-  database: Database.Database,
+async function publishWatchBundleInDb(
+  database: Client,
   geography: string,
   brief: WatchBriefInput,
   signals: WatchSignalInput[],
@@ -1196,19 +1125,19 @@ function publishWatchBundleInDb(
   },
   action: WatchRevisionAction,
   restoredFromRevisionId?: number | null
-): WatchPublishResult {
+): Promise<WatchPublishResult> {
   const timestamp = new Date().toISOString();
-  applyWatchBundleState(database, geography, brief, signals, timestamp);
+  await applyWatchBundleState(database, geography, brief, signals, timestamp);
 
   // Record signal history for sparkline charts
-  recordSignalHistory(geography, signals.map(s => ({ slug: s.slug, status: s.status, metricText: s.metricText })));
+  await recordSignalHistory(geography, signals.map(s => ({ slug: s.slug, status: s.status, metricText: s.metricText })));
 
-  const bundle = getWatchBundleFromDb(database, geography);
+  const bundle = await getWatchBundleFromDb(database, geography);
   if (!bundle) {
     throw new Error('Watch data unavailable.');
   }
 
-  const revision = createWatchRevisionInDb(database, {
+  const revision = await createWatchRevisionInDb(database, {
     geography,
     action,
     snapshot: bundle,
@@ -1235,19 +1164,16 @@ function parseLeadingNumber(text: string): number | null {
   return match ? parseFloat(match[0]) : null;
 }
 
-export function recordSignalHistory(geography: string, signals: Array<{ slug: string; status: string; metricText: string }>) {
-  const db = getDb();
-  const stmt = db.prepare(
-    `INSERT INTO watch_signal_history (geography, signal_slug, status, severity, metric_value, recorded_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  );
+export async function recordSignalHistory(geography: string, signals: Array<{ slug: string; status: string; metricText: string }>) {
+  const c = getClient();
   const now = new Date().toISOString();
-  const tx = db.transaction(() => {
-    for (const s of signals) {
-      stmt.run(geography, s.slug, s.status, STATUS_SEVERITY[s.status] ?? 0, parseLeadingNumber(s.metricText), now);
-    }
-  });
-  tx();
+  for (const s of signals) {
+    await c.execute({
+      sql: `INSERT INTO watch_signal_history (geography, signal_slug, status, severity, metric_value, recorded_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [geography, s.slug, s.status, STATUS_SEVERITY[s.status] ?? 0, parseLeadingNumber(s.metricText), now],
+    });
+  }
 }
 
 export interface SignalHistoryPoint {
@@ -1258,27 +1184,21 @@ export interface SignalHistoryPoint {
   recordedAt: string;
 }
 
-export function getSignalHistory(geography: string, days: number = 30): SignalHistoryPoint[] {
-  const db = getDb();
-  const rows = db.prepare(
-    `SELECT signal_slug, status, severity, metric_value, recorded_at
+export async function getSignalHistory(geography: string, days: number = 30): Promise<SignalHistoryPoint[]> {
+  const { rows } = await getClient().execute({
+    sql: `SELECT signal_slug, status, severity, metric_value, recorded_at
      FROM watch_signal_history
      WHERE geography = ? AND recorded_at >= datetime('now', '-' || ? || ' days')
-     ORDER BY signal_slug, recorded_at ASC`
-  ).all(geography, days) as Array<{
-    signal_slug: string;
-    status: string;
-    severity: number;
-    metric_value: number | null;
-    recorded_at: string;
-  }>;
+     ORDER BY signal_slug, recorded_at ASC`,
+    args: [geography, days],
+  });
 
   return rows.map(r => ({
-    signalSlug: r.signal_slug,
-    status: r.status,
-    severity: r.severity,
-    metricValue: r.metric_value,
-    recordedAt: r.recorded_at,
+    signalSlug: String(r.signal_slug),
+    status: String(r.status),
+    severity: Number(r.severity),
+    metricValue: r.metric_value != null ? Number(r.metric_value) : null,
+    recordedAt: String(r.recorded_at),
   }));
 }
 
@@ -1295,77 +1215,91 @@ export interface PlatformPulse {
   recentEvents: Array<{ eventType: string; createdAt: string }>;
 }
 
-export function getPlatformPulse(): PlatformPulse {
-  const db = getDb();
-  const count = (table: string) =>
-    (db.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as { c: number }).c;
+export async function getPlatformPulse(): Promise<PlatformPulse> {
+  const c = getClient();
 
-  const recentConvos = db.prepare(
+  const countTable = async (table: string) => {
+    const { rows } = await c.execute(`SELECT COUNT(*) as c FROM ${table}`);
+    return Number(rows[0].c);
+  };
+
+  const [totalUsers, totalConversations, totalPracticeRuns, totalPosts, totalAnalyticsEvents, totalWatchRevisions] =
+    await Promise.all([
+      countTable('users'),
+      countTable('conversations'),
+      countTable('practice_runs'),
+      countTable('posts'),
+      countTable('analytics'),
+      countTable('watch_revisions'),
+    ]);
+
+  const { rows: recentConvos } = await c.execute(
     `SELECT id, mode, created_at FROM conversations ORDER BY created_at DESC LIMIT 8`
-  ).all() as Array<{ id: number; mode: string; created_at: string }>;
+  );
 
-  const recentEvents = db.prepare(
+  const { rows: recentEvents } = await c.execute(
     `SELECT event_type, created_at FROM analytics ORDER BY created_at DESC LIMIT 12`
-  ).all() as Array<{ event_type: string; created_at: string }>;
+  );
 
   return {
-    totalUsers: count('users'),
-    totalConversations: count('conversations'),
-    totalPracticeRuns: count('practice_runs'),
-    totalPosts: count('posts'),
-    totalAnalyticsEvents: count('analytics'),
-    totalWatchRevisions: count('watch_revisions'),
-    recentConversations: recentConvos.map(r => ({ id: r.id, mode: r.mode, createdAt: r.created_at })),
-    recentEvents: recentEvents.map(r => ({ eventType: r.event_type, createdAt: r.created_at })),
+    totalUsers,
+    totalConversations,
+    totalPracticeRuns,
+    totalPosts,
+    totalAnalyticsEvents,
+    totalWatchRevisions,
+    recentConversations: recentConvos.map(r => ({ id: Number(r.id), mode: String(r.mode), createdAt: String(r.created_at) })),
+    recentEvents: recentEvents.map(r => ({ eventType: String(r.event_type), createdAt: String(r.created_at) })),
   };
 }
 
-export function getRandomNonisms(count: number = 5): Array<{ text: string; category: string }> {
-  const db = getDb();
-  return db.prepare(
-    `SELECT text, category FROM nonisms ORDER BY RANDOM() LIMIT ?`
-  ).all(count) as Array<{ text: string; category: string }>;
+export async function getRandomNonisms(count: number = 5): Promise<Array<{ text: string; category: string }>> {
+  const { rows } = await getClient().execute({
+    sql: `SELECT text, category FROM nonisms ORDER BY RANDOM() LIMIT ?`,
+    args: [count],
+  });
+  return rows.map(r => ({ text: String(r.text), category: String(r.category) }));
 }
 
-export function getRecentConversationPreviews(limit: number = 10): Array<{ id: number; mode: string; preview: string; createdAt: string }> {
-  const db = getDb();
-  const rows = db.prepare(
-    `SELECT id, mode, messages, created_at FROM conversations ORDER BY created_at DESC LIMIT ?`
-  ).all(limit) as Array<{ id: number; mode: string; messages: string; created_at: string }>;
+export async function getRecentConversationPreviews(limit: number = 10): Promise<Array<{ id: number; mode: string; preview: string; createdAt: string }>> {
+  const { rows } = await getClient().execute({
+    sql: `SELECT id, mode, messages, created_at FROM conversations ORDER BY created_at DESC LIMIT ?`,
+    args: [limit],
+  });
 
   return rows.map(r => {
     let preview = '';
     try {
-      const msgs = JSON.parse(r.messages);
+      const msgs = JSON.parse(String(r.messages));
       const first = msgs.find((m: { role: string; content: string }) => m.role === 'user');
       preview = first?.content?.substring(0, 80) || '';
     } catch { /* skip */ }
-    return { id: r.id, mode: r.mode, preview, createdAt: r.created_at };
+    return { id: Number(r.id), mode: String(r.mode), preview, createdAt: String(r.created_at) };
   });
 }
 
-export function getPracticeStats(): { totalRuns: number; avgScore: number; streakDays: number; byTool: Record<string, number> } {
-  const db = getDb();
-  const total = (db.prepare('SELECT COUNT(*) as c FROM practice_runs').get() as { c: number }).c;
-  const avg = (db.prepare('SELECT AVG(score) as a FROM practice_runs WHERE score IS NOT NULL').get() as { a: number | null }).a ?? 0;
-  const tools = db.prepare('SELECT tool, COUNT(*) as c FROM practice_runs GROUP BY tool').all() as Array<{ tool: string; c: number }>;
-  const days = db.prepare('SELECT COUNT(DISTINCT local_day) as d FROM practice_runs').get() as { d: number };
+export async function getPracticeStats(): Promise<{ totalRuns: number; avgScore: number; streakDays: number; byTool: Record<string, number> }> {
+  const c = getClient();
+  const { rows: totalRows } = await c.execute('SELECT COUNT(*) as c FROM practice_runs');
+  const total = Number(totalRows[0].c);
+  const { rows: avgRows } = await c.execute('SELECT AVG(score) as a FROM practice_runs WHERE score IS NOT NULL');
+  const avg = avgRows[0].a != null ? Number(avgRows[0].a) : 0;
+  const { rows: toolRows } = await c.execute('SELECT tool, COUNT(*) as c FROM practice_runs GROUP BY tool');
+  const { rows: dayRows } = await c.execute('SELECT COUNT(DISTINCT local_day) as d FROM practice_runs');
 
   const byTool: Record<string, number> = {};
-  for (const t of tools) byTool[t.tool] = t.c;
+  for (const t of toolRows) byTool[String(t.tool)] = Number(t.c);
 
-  return { totalRuns: total, avgScore: Math.round(avg * 100) / 100, streakDays: days.d, byTool };
+  return { totalRuns: total, avgScore: Math.round(avg * 100) / 100, streakDays: Number(dayRows[0].d), byTool };
 }
 
-export function getWatchBundle(geography: string): WatchBundle | null {
-  return getWatchBundleFromDb(getDb(), geography);
+export async function getWatchBundle(geography: string): Promise<WatchBundle | null> {
+  return getWatchBundleFromDb(getClient(), geography);
 }
 
-export function listWatchRevisions(geography: string): WatchRevisionSummary[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT
+export async function listWatchRevisions(geography: string): Promise<WatchRevisionSummary[]> {
+  const { rows } = await getClient().execute({
+    sql: `SELECT
          wr.id,
          wr.geography,
          wr.version,
@@ -1383,44 +1317,32 @@ export function listWatchRevisions(geography: string): WatchRevisionSummary[] {
        LEFT JOIN watch_revisions source
          ON source.id = wr.restored_from_revision_id
        WHERE wr.geography = ?
-       ORDER BY wr.version DESC, wr.id DESC`
-    )
-    .all(geography) as Array<{
-    id: number;
-    geography: string;
-    version: number;
-    action: WatchRevisionAction;
-    headline: string;
-    status_summary: string;
-    actor_user_id: number;
-    restored_from_revision_id: number | null;
-    created_at: string;
-    actor_display_name: string | null;
-    restored_from_revision_version: number | null;
-  }>;
+       ORDER BY wr.version DESC, wr.id DESC`,
+    args: [geography],
+  });
 
   return rows.map(row => ({
-    id: row.id,
-    geography: row.geography,
-    version: row.version,
-    action: row.action,
-    headline: row.headline,
-    statusSummary: parseWatchStatusSummary(row.status_summary),
+    id: Number(row.id),
+    geography: String(row.geography),
+    version: Number(row.version),
+    action: String(row.action) as WatchRevisionAction,
+    headline: String(row.headline),
+    statusSummary: parseWatchStatusSummary(String(row.status_summary)),
     actor: {
-      id: row.actor_user_id,
-      displayName: row.actor_display_name ?? 'Unknown admin',
+      id: Number(row.actor_user_id),
+      displayName: row.actor_display_name ? String(row.actor_display_name) : 'Unknown admin',
     },
-    restoredFromRevisionId: row.restored_from_revision_id,
-    restoredFromRevisionVersion: row.restored_from_revision_version,
-    createdAt: row.created_at,
+    restoredFromRevisionId: row.restored_from_revision_id != null ? Number(row.restored_from_revision_id) : null,
+    restoredFromRevisionVersion: row.restored_from_revision_version != null ? Number(row.restored_from_revision_version) : null,
+    createdAt: String(row.created_at),
   }));
 }
 
-export function getWatchRevisionById(revisionId: number): WatchRevision | null {
-  return getWatchRevisionByIdInDb(getDb(), revisionId);
+export async function getWatchRevisionById(revisionId: number): Promise<WatchRevision | null> {
+  return getWatchRevisionByIdInDb(getClient(), revisionId);
 }
 
-export function publishWatchBundle(
+export async function publishWatchBundle(
   geography: string,
   brief: WatchBriefInput,
   signals: WatchSignalInput[],
@@ -1428,87 +1350,78 @@ export function publishWatchBundle(
     userId: number;
     displayName: string;
   }
-): WatchPublishResult {
-  const db = getDb();
-  const transaction = db.transaction(() =>
-    publishWatchBundleInDb(db, geography, brief, signals, actor, 'publish')
-  );
-
-  return transaction();
+): Promise<WatchPublishResult> {
+  return publishWatchBundleInDb(getClient(), geography, brief, signals, actor, 'publish');
 }
 
-export function restoreWatchRevision(
+export async function restoreWatchRevision(
   revisionId: number,
   actor: {
     userId: number;
     displayName: string;
   }
-): WatchPublishResult | null {
-  const db = getDb();
-  const transaction = db.transaction(() => {
-    const revision = getWatchRevisionByIdInDb(db, revisionId);
-    if (!revision) {
-      return null;
-    }
+): Promise<WatchPublishResult | null> {
+  const c = getClient();
+  const revision = await getWatchRevisionByIdInDb(c, revisionId);
+  if (!revision) {
+    return null;
+  }
 
-    return publishWatchBundleInDb(
-      db,
-      revision.snapshot.geography,
-      {
-        headline: revision.snapshot.brief.headline,
-        summary: revision.snapshot.brief.summary,
-        watchouts: revision.snapshot.brief.watchouts,
-      },
-      revision.snapshot.signals.map(signal => ({
-        slug: signal.slug,
-        status: signal.status,
-        summary: signal.summary,
-        whyItMatters: signal.whyItMatters,
-        whatToDo: signal.whatToDo,
-        metricText: signal.metricText,
-        trendText: signal.trendText,
-        sources: signal.sources,
-      })),
-      actor,
-      'rollback',
-      revision.id
-    );
+  return publishWatchBundleInDb(
+    c,
+    revision.snapshot.geography,
+    {
+      headline: revision.snapshot.brief.headline,
+      summary: revision.snapshot.brief.summary,
+      watchouts: revision.snapshot.brief.watchouts,
+    },
+    revision.snapshot.signals.map(signal => ({
+      slug: signal.slug,
+      status: signal.status,
+      summary: signal.summary,
+      whyItMatters: signal.whyItMatters,
+      whatToDo: signal.whatToDo,
+      metricText: signal.metricText,
+      trendText: signal.trendText,
+      sources: signal.sources,
+    })),
+    actor,
+    'rollback',
+    revision.id
+  );
+}
+
+export async function saveWatchItem(
+  userId: number,
+  geography: string,
+  itemKind: 'signal' | 'brief',
+  itemSlug: string
+) {
+  await getClient().execute({
+    sql: `INSERT OR IGNORE INTO saved_watch_items (user_id, geography, item_kind, item_slug)
+     VALUES (?, ?, ?, ?)`,
+    args: [userId, geography, itemKind, itemSlug],
   });
-
-  return transaction();
 }
 
-export function saveWatchItem(
+export async function removeSavedWatchItem(
   userId: number,
   geography: string,
   itemKind: 'signal' | 'brief',
   itemSlug: string
 ) {
-  const db = getDb();
-  db.prepare(
-    `INSERT OR IGNORE INTO saved_watch_items (user_id, geography, item_kind, item_slug)
-     VALUES (?, ?, ?, ?)`
-  ).run(userId, geography, itemKind, itemSlug);
+  await getClient().execute({
+    sql: `DELETE FROM saved_watch_items
+     WHERE user_id = ? AND geography = ? AND item_kind = ? AND item_slug = ?`,
+    args: [userId, geography, itemKind, itemSlug],
+  });
 }
 
-export function removeSavedWatchItem(
-  userId: number,
-  geography: string,
-  itemKind: 'signal' | 'brief',
-  itemSlug: string
-) {
-  const db = getDb();
-  db.prepare(
-    `DELETE FROM saved_watch_items
-     WHERE user_id = ? AND geography = ? AND item_kind = ? AND item_slug = ?`
-  ).run(userId, geography, itemKind, itemSlug);
-}
+export async function listSavedWatchItemsForUser(userId: number): Promise<SavedWatchItemSummary[]> {
+  const c = getClient();
 
-export function listSavedWatchItemsForUser(userId: number): SavedWatchItemSummary[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT
+  const { rows } = await c.execute({
+    sql: `SELECT
          swi.id,
          swi.geography,
          swi.item_kind,
@@ -1524,124 +1437,100 @@ export function listSavedWatchItemsForUser(userId: number): SavedWatchItemSummar
        LEFT JOIN watch_snapshots snap
          ON ws.id = snap.signal_id AND snap.geography = ws.geography
        WHERE swi.user_id = ?
-       ORDER BY swi.created_at DESC, swi.id DESC`
-    )
-    .all(userId) as Array<{
-    id: number;
-    geography: string;
-    item_kind: 'signal' | 'brief';
-    item_slug: string;
-    created_at: string;
-    signal_title: string | null;
-    signal_summary: string | null;
-    signal_status: string | null;
-    signal_updated_at: string | null;
-  }>;
+       ORDER BY swi.created_at DESC, swi.id DESC`,
+    args: [userId],
+  });
 
-  const briefs = db
-    .prepare('SELECT geography, headline, summary, updated_at FROM watch_briefs')
-    .all() as Array<{ geography: string; headline: string; summary: string; updated_at: string }>;
-  const briefByGeography = new Map(briefs.map(brief => [brief.geography, brief]));
+  const { rows: briefs } = await c.execute(
+    'SELECT geography, headline, summary, updated_at FROM watch_briefs'
+  );
+  const briefByGeography = new Map(briefs.map(brief => [String(brief.geography), brief]));
 
   return rows.map(row => {
-    if (row.item_kind === 'brief') {
-      const brief = briefByGeography.get(row.geography);
+    if (String(row.item_kind) === 'brief') {
+      const brief = briefByGeography.get(String(row.geography));
       return {
-        id: row.id,
-        geography: row.geography,
-        itemKind: row.item_kind,
-        itemSlug: row.item_slug,
-        title: brief?.headline ?? 'Thailand Brief',
-        summary: brief?.summary ?? 'Saved watch brief',
+        id: Number(row.id),
+        geography: String(row.geography),
+        itemKind: String(row.item_kind) as 'signal' | 'brief',
+        itemSlug: String(row.item_slug),
+        title: brief ? String(brief.headline) : 'Thailand Brief',
+        summary: brief ? String(brief.summary) : 'Saved watch brief',
         status: null,
-        updatedAt: brief?.updated_at ?? row.created_at,
-        createdAt: row.created_at,
+        updatedAt: brief ? String(brief.updated_at) : String(row.created_at),
+        createdAt: String(row.created_at),
       };
     }
 
     return {
-      id: row.id,
-      geography: row.geography,
-      itemKind: row.item_kind,
-      itemSlug: row.item_slug,
-      title: row.signal_title ?? row.item_slug,
-      summary: row.signal_summary ?? 'Saved watch signal',
-      status: row.signal_status,
-      updatedAt: row.signal_updated_at ?? row.created_at,
-      createdAt: row.created_at,
+      id: Number(row.id),
+      geography: String(row.geography),
+      itemKind: String(row.item_kind) as 'signal' | 'brief',
+      itemSlug: String(row.item_slug),
+      title: row.signal_title ? String(row.signal_title) : String(row.item_slug),
+      summary: row.signal_summary ? String(row.signal_summary) : 'Saved watch signal',
+      status: row.signal_status != null ? String(row.signal_status) : null,
+      updatedAt: row.signal_updated_at ? String(row.signal_updated_at) : String(row.created_at),
+      createdAt: String(row.created_at),
     };
   });
 }
 
-export function createContactRequest(input: ContactRequestInput) {
-  const db = getDb();
-  const result = db
-    .prepare(
-      `INSERT INTO contact_requests (name, email, organization, use_case)
-       VALUES (?, ?, ?, ?)`
-    )
-    .run(input.name, input.email, input.organization ?? '', input.useCase);
+export async function createContactRequest(input: ContactRequestInput): Promise<number> {
+  const result = await getClient().execute({
+    sql: `INSERT INTO contact_requests (name, email, organization, use_case)
+       VALUES (?, ?, ?, ?)`,
+    args: [input.name, input.email, input.organization ?? '', input.useCase],
+  });
 
   return Number(result.lastInsertRowid);
 }
 
-export function listContactRequests(limit = 50): ContactRequestSummary[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT id, name, email, organization, use_case, status, created_at
+export async function listContactRequests(limit = 50): Promise<ContactRequestSummary[]> {
+  const { rows } = await getClient().execute({
+    sql: `SELECT id, name, email, organization, use_case, status, created_at
        FROM contact_requests
        ORDER BY created_at DESC, id DESC
-       LIMIT ?`
-    )
-    .all(limit) as Array<{
-    id: number;
-    name: string;
-    email: string;
-    organization: string;
-    use_case: string;
-    status: string;
-    created_at: string;
-  }>;
+       LIMIT ?`,
+    args: [limit],
+  });
 
   return rows.map(row => ({
-    id: row.id,
-    name: row.name,
-    email: row.email,
-    organization: row.organization,
-    useCase: row.use_case,
-    status: row.status,
-    createdAt: row.created_at,
+    id: Number(row.id),
+    name: String(row.name),
+    email: String(row.email),
+    organization: String(row.organization),
+    useCase: String(row.use_case),
+    status: String(row.status),
+    createdAt: String(row.created_at),
   }));
 }
 
-export function updateContactRequestStatus(id: number, status: string) {
-  const db = getDb();
-  const result = db
-    .prepare(
-      `UPDATE contact_requests
+export async function updateContactRequestStatus(id: number, status: string): Promise<boolean> {
+  const result = await getClient().execute({
+    sql: `UPDATE contact_requests
        SET status = ?
-       WHERE id = ?`
-    )
-    .run(status, id);
+       WHERE id = ?`,
+    args: [status, id],
+  });
 
-  return result.changes > 0;
+  return result.rowsAffected > 0;
 }
 
-export function getContactRequestStats() {
-  const db = getDb();
-  return db
-    .prepare(
-      `SELECT
+export async function getContactRequestStats() {
+  const { rows } = await getClient().execute(
+    `SELECT
          COUNT(*) as totalCount,
          SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END) as newCount,
          SUM(CASE WHEN created_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) as recentCount
        FROM contact_requests`
-    )
-    .get() as {
-    totalCount: number;
-    newCount: number;
-    recentCount: number;
+  );
+
+  const row = rows[0];
+  return {
+    totalCount: Number(row.totalCount),
+    newCount: Number(row.newCount),
+    recentCount: Number(row.recentCount),
   };
 }
 
@@ -1654,15 +1543,12 @@ function getBangkokLocalDay(date: Date = new Date()) {
   }).format(date);
 }
 
-export function createPracticeRun(input: PracticeRunInput) {
-  const db = getDb();
-  const result = db
-    .prepare(
-      `INSERT INTO practice_runs
+export async function createPracticeRun(input: PracticeRunInput): Promise<number> {
+  const result = await getClient().execute({
+    sql: `INSERT INTO practice_runs
         (user_id, tool, item_id, title, summary, score, local_day, details)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
       input.userId,
       input.tool,
       input.itemId,
@@ -1670,57 +1556,45 @@ export function createPracticeRun(input: PracticeRunInput) {
       input.summary,
       input.score ?? null,
       input.localDay ?? getBangkokLocalDay(),
-      JSON.stringify(input.details ?? {})
-    );
+      JSON.stringify(input.details ?? {}),
+    ],
+  });
 
   return Number(result.lastInsertRowid);
 }
 
-export function listPracticeRunsForUser(userId: number, limit = 8): PracticeRunSummary[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT id, tool, item_id, title, summary, score, local_day, created_at
+export async function listPracticeRunsForUser(userId: number, limit = 8): Promise<PracticeRunSummary[]> {
+  const { rows } = await getClient().execute({
+    sql: `SELECT id, tool, item_id, title, summary, score, local_day, created_at
        FROM practice_runs
        WHERE user_id = ?
        ORDER BY created_at DESC, id DESC
-       LIMIT ?`
-    )
-    .all(userId, limit) as Array<{
-    id: number;
-    tool: 'challenge' | 'arena' | 'simulate';
-    item_id: string;
-    title: string;
-    summary: string;
-    score: number | null;
-    local_day: string;
-    created_at: string;
-  }>;
+       LIMIT ?`,
+    args: [userId, limit],
+  });
 
   return rows.map(row => ({
-    id: row.id,
-    tool: row.tool,
-    itemId: row.item_id,
-    title: row.title,
-    summary: row.summary,
-    score: row.score,
-    localDay: row.local_day,
-    createdAt: row.created_at,
+    id: Number(row.id),
+    tool: String(row.tool) as 'challenge' | 'arena' | 'simulate',
+    itemId: String(row.item_id),
+    title: String(row.title),
+    summary: String(row.summary),
+    score: row.score != null ? Number(row.score) : null,
+    localDay: String(row.local_day),
+    createdAt: String(row.created_at),
   }));
 }
 
-export function getChallengeStreak(userId: number, today: Date = new Date()) {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT DISTINCT local_day
+export async function getChallengeStreak(userId: number, today: Date = new Date()): Promise<number> {
+  const { rows } = await getClient().execute({
+    sql: `SELECT DISTINCT local_day
        FROM practice_runs
        WHERE user_id = ? AND tool = 'challenge'
-       ORDER BY local_day DESC`
-    )
-    .all(userId) as Array<{ local_day: string }>;
+       ORDER BY local_day DESC`,
+    args: [userId],
+  });
 
-  const days = new Set(rows.map(row => row.local_day));
+  const days = new Set(rows.map(row => String(row.local_day)));
   let streak = 0;
   const cursor = new Date(today);
 
@@ -1748,49 +1622,39 @@ export interface IntelBrief {
   generatedAt: string;
 }
 
-export function insertIntelBrief(
+export async function insertIntelBrief(
   geography: string,
   headline: string,
   content: string,
   contextSnapshot: string
-): number {
-  const db = getDb();
-  const result = db
-    .prepare(
-      `INSERT INTO intel_briefs (geography, headline, content, context_snapshot)
-       VALUES (?, ?, ?, ?)`
-    )
-    .run(geography, headline, content, contextSnapshot);
+): Promise<number> {
+  const result = await getClient().execute({
+    sql: `INSERT INTO intel_briefs (geography, headline, content, context_snapshot)
+       VALUES (?, ?, ?, ?)`,
+    args: [geography, headline, content, contextSnapshot],
+  });
   return Number(result.lastInsertRowid);
 }
 
-export function getLatestIntelBrief(geography: string): IntelBrief | null {
-  const db = getDb();
-  const row = db
-    .prepare(
-      `SELECT id, geography, headline, content, context_snapshot, generated_at
+export async function getLatestIntelBrief(geography: string): Promise<IntelBrief | null> {
+  const { rows } = await getClient().execute({
+    sql: `SELECT id, geography, headline, content, context_snapshot, generated_at
        FROM intel_briefs
        WHERE geography = ?
        ORDER BY generated_at DESC
-       LIMIT 1`
-    )
-    .get(geography) as {
-    id: number;
-    geography: string;
-    headline: string;
-    content: string;
-    context_snapshot: string;
-    generated_at: string;
-  } | undefined;
+       LIMIT 1`,
+    args: [geography],
+  });
 
+  const row = rows[0];
   if (!row) return null;
   return {
-    id: row.id,
-    geography: row.geography,
-    headline: row.headline,
-    content: row.content,
-    contextSnapshot: row.context_snapshot,
-    generatedAt: row.generated_at,
+    id: Number(row.id),
+    geography: String(row.geography),
+    headline: String(row.headline),
+    content: String(row.content),
+    contextSnapshot: String(row.context_snapshot),
+    generatedAt: String(row.generated_at),
   };
 }
 
@@ -1807,7 +1671,7 @@ export interface IntelMemoryItem {
   resolvedAt: string | null;
 }
 
-export function insertIntelMemory(params: {
+export async function insertIntelMemory(params: {
   geography: string;
   kind: 'prediction' | 'observation' | 'correlation' | 'alert';
   claim: string;
@@ -1815,83 +1679,66 @@ export function insertIntelMemory(params: {
   sourceBriefId?: number;
   sourceAnalysisQuestion?: string;
   expiresAt?: string;
-}): number {
-  const db = getDb();
-  const result = db
-    .prepare(
-      `INSERT INTO intel_memory (geography, kind, claim, confidence, source_brief_id, source_analysis_question, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
+}): Promise<number> {
+  const result = await getClient().execute({
+    sql: `INSERT INTO intel_memory (geography, kind, claim, confidence, source_brief_id, source_analysis_question, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    args: [
       params.geography,
       params.kind,
       params.claim,
       params.confidence ?? null,
       params.sourceBriefId ?? null,
       params.sourceAnalysisQuestion ?? null,
-      params.expiresAt ?? null
-    );
+      params.expiresAt ?? null,
+    ],
+  });
   return Number(result.lastInsertRowid);
 }
 
-export function getIntelMemoryForContext(geography: string, limit = 20): IntelMemoryItem[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT id, geography, kind, claim, confidence, source_brief_id, status, resolution_note, created_at, resolved_at
+export async function getIntelMemoryForContext(geography: string, limit = 20): Promise<IntelMemoryItem[]> {
+  const { rows } = await getClient().execute({
+    sql: `SELECT id, geography, kind, claim, confidence, source_brief_id, status, resolution_note, created_at, resolved_at
        FROM intel_memory
        WHERE geography = ? AND status = 'open'
        ORDER BY created_at DESC
-       LIMIT ?`
-    )
-    .all(geography, limit) as Array<{
-    id: number;
-    geography: string;
-    kind: string;
-    claim: string;
-    confidence: string | null;
-    source_brief_id: number | null;
-    status: string;
-    resolution_note: string | null;
-    created_at: string;
-    resolved_at: string | null;
-  }>;
+       LIMIT ?`,
+    args: [geography, limit],
+  });
 
   return rows.map(r => ({
-    id: r.id,
-    geography: r.geography,
-    kind: r.kind as IntelMemoryItem['kind'],
-    claim: r.claim,
-    confidence: r.confidence as IntelMemoryItem['confidence'],
-    sourceBriefId: r.source_brief_id,
-    status: r.status as IntelMemoryItem['status'],
-    resolutionNote: r.resolution_note,
-    createdAt: r.created_at,
-    resolvedAt: r.resolved_at,
+    id: Number(r.id),
+    geography: String(r.geography),
+    kind: String(r.kind) as IntelMemoryItem['kind'],
+    claim: String(r.claim),
+    confidence: r.confidence != null ? String(r.confidence) as IntelMemoryItem['confidence'] : null,
+    sourceBriefId: r.source_brief_id != null ? Number(r.source_brief_id) : null,
+    status: String(r.status) as IntelMemoryItem['status'],
+    resolutionNote: r.resolution_note != null ? String(r.resolution_note) : null,
+    createdAt: String(r.created_at),
+    resolvedAt: r.resolved_at != null ? String(r.resolved_at) : null,
   }));
 }
 
-export function resolveIntelMemory(id: number, status: 'confirmed' | 'refuted' | 'expired', note?: string) {
-  const db = getDb();
-  db.prepare(
-    `UPDATE intel_memory SET status = ?, resolution_note = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?`
-  ).run(status, note ?? null, id);
+export async function resolveIntelMemory(id: number, status: 'confirmed' | 'refuted' | 'expired', note?: string) {
+  await getClient().execute({
+    sql: `UPDATE intel_memory SET status = ?, resolution_note = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    args: [status, note ?? null, id],
+  });
 }
 
-export function logAnalysis(geography: string, question: string, response: string) {
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO intel_analysis_log (geography, question, response) VALUES (?, ?, ?)`
-  ).run(geography, question, response);
+export async function logAnalysis(geography: string, question: string, response: string) {
+  await getClient().execute({
+    sql: `INSERT INTO intel_analysis_log (geography, question, response) VALUES (?, ?, ?)`,
+    args: [geography, question, response],
+  });
 }
 
-export function getRecentAnalyses(geography: string, limit = 5): Array<{ question: string; response: string; createdAt: string }> {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT question, response, created_at FROM intel_analysis_log
-       WHERE geography = ? ORDER BY created_at DESC LIMIT ?`
-    )
-    .all(geography, limit) as Array<{ question: string; response: string; created_at: string }>;
-  return rows.map(r => ({ question: r.question, response: r.response, createdAt: r.created_at }));
+export async function getRecentAnalyses(geography: string, limit = 5): Promise<Array<{ question: string; response: string; createdAt: string }>> {
+  const { rows } = await getClient().execute({
+    sql: `SELECT question, response, created_at FROM intel_analysis_log
+       WHERE geography = ? ORDER BY created_at DESC LIMIT ?`,
+    args: [geography, limit],
+  });
+  return rows.map(r => ({ question: String(r.question), response: String(r.response), createdAt: String(r.created_at) }));
 }

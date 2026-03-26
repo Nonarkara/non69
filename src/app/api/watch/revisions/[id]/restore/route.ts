@@ -19,7 +19,7 @@ export async function POST(
   }
 
   try {
-    const result = restoreWatchRevision(revisionId, {
+    const result = await restoreWatchRevision(revisionId, {
       userId: user.id,
       displayName: user.display_name,
     });
@@ -28,7 +28,7 @@ export async function POST(
       return Response.json({ error: 'Watch revision not found.' }, { status: 404 });
     }
 
-    trackEvent('watch_restore', {
+    await trackEvent('watch_restore', {
       geography: result.bundle.geography,
       sourceRevisionId: revisionId,
       revisionId: result.revision.id,

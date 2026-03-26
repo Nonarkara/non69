@@ -110,8 +110,8 @@ const demoPinned = [
 ];
 
 export default async function CockpitPreviewPage() {
-  const bundle = getWatchBundle('th');
-  const revisions = listWatchRevisions('th');
+  const bundle = await getWatchBundle('th');
+  const revisions = await listWatchRevisions('th');
 
   if (!bundle) {
     return (

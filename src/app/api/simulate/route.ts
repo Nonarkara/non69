@@ -55,7 +55,7 @@ Return as JSON:
 Be honest. Real growth comes from honest feedback. As Dr. Non says: "Confidence is built by failing."`;
 
 export async function POST(req: NextRequest) {
-  const user = getUserFromRequest(req);
+  const user = await getUserFromRequest(req);
   if (!user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Invalid request' }, { status: 400 });
   }
 
-  trackEvent('simulation', {
+  await trackEvent('simulation', {
     action: body.action,
     scenarioId: body.scenario.id,
     messageCount: body.messages?.length ?? 0,
@@ -133,7 +133,7 @@ export async function POST(req: NextRequest) {
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const results = JSON.parse(jsonMatch[0]);
-        createPracticeRun({
+        await createPracticeRun({
           userId: user.id,
           tool: 'simulate',
           itemId: body.scenario.id,

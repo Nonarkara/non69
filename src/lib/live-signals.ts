@@ -1,4 +1,4 @@
-import { getDb } from '@/lib/db';
+import { getClient } from '@/lib/db';
 
 export type LiveSignalCacheStatus = 'fresh' | 'stale' | 'failed';
 
@@ -83,14 +83,14 @@ async function fetchBangkokWeatherFromSource(): Promise<LiveWeatherReading> {
 export async function getLiveWeather(area: string = 'bangkok'): Promise<LiveWeatherReading> {
   if (area !== 'bangkok') throw new Error('Only bangkok is available in this MVP.');
 
-  const cached = getCacheRow<LiveWeatherReading>('weather', area);
+  const cached = await getCacheRow<LiveWeatherReading>('weather', area);
   if (cached && isCacheFresh(cached.fetchedAt, WEATHER_CACHE_TTL_MS)) {
     return { ...cached.payload, status: cached.status, stale: false, fetchedAt: cached.fetchedAt };
   }
 
   try {
     const fresh = await fetchBangkokWeatherFromSource();
-    upsertCachedSignalRecord<LiveWeatherReading>({
+    await upsertCachedSignalRecord<LiveWeatherReading>({
       slug: 'weather',
       area,
       payload: fresh,
@@ -131,7 +131,7 @@ const HOURLY_URL =
   'https://api.open-meteo.com/v1/forecast?latitude=13.7563&longitude=100.5018&hourly=temperature_2m,relative_humidity_2m&timezone=Asia%2FBangkok&forecast_days=1';
 
 export async function getHourlyForecast(): Promise<HourlyForecast> {
-  const cached = getCacheRow<HourlyForecast>('hourly-forecast', 'bangkok');
+  const cached = await getCacheRow<HourlyForecast>('hourly-forecast', 'bangkok');
   if (cached && isCacheFresh(cached.fetchedAt, 30 * 60 * 1000)) {
     return { ...cached.payload, status: cached.status, fetchedAt: cached.fetchedAt };
   }
@@ -153,7 +153,7 @@ export async function getHourlyForecast(): Promise<HourlyForecast> {
     }));
 
     const result: HourlyForecast = { hours, fetchedAt: new Date().toISOString(), status: 'fresh' };
-    upsertCachedSignalRecord<HourlyForecast>({
+    await upsertCachedSignalRecord<HourlyForecast>({
       slug: 'hourly-forecast', area: 'bangkok', payload: result,
       sourceLabel: 'Open-Meteo', sourceUpdatedAt: result.fetchedAt,
       fetchedAt: result.fetchedAt, status: 'fresh',
@@ -170,42 +170,33 @@ const OPEN_METEO_SOURCE_URL = 'https://open-meteo.com/en/docs/air-quality-api';
 const OPEN_METEO_API_URL =
   'https://air-quality-api.open-meteo.com/v1/air-quality?latitude=13.7563&longitude=100.5018&current=pm2_5,us_aqi&timezone=Asia%2FBangkok';
 
-function getCacheRow<T>(slug: string, area: string): CachedSignalRecord<T> | null {
-  const db = getDb();
-  const row = db
-    .prepare(
-      `SELECT slug, area, payload, source_label, source_updated_at, fetched_at, status
-       FROM live_signal_cache
-       WHERE slug = ? AND area = ?`
-    )
-    .get(slug, area) as
-    | {
-        slug: string;
-        area: string;
-        payload: string;
-        source_label: string;
-        source_updated_at: string | null;
-        fetched_at: string;
-        status: LiveSignalCacheStatus;
-      }
-    | undefined;
+async function getCacheRow<T>(slug: string, area: string): Promise<CachedSignalRecord<T> | null> {
+  const db = getClient();
+  const result = await db.execute({
+    sql: `SELECT slug, area, payload, source_label, source_updated_at, fetched_at, status
+          FROM live_signal_cache
+          WHERE slug = ? AND area = ?`,
+    args: [slug, area],
+  });
+
+  const row = result.rows[0];
 
   if (!row) {
     return null;
   }
 
   return {
-    slug: row.slug,
-    area: row.area,
-    payload: JSON.parse(row.payload) as T,
-    sourceLabel: row.source_label,
-    sourceUpdatedAt: row.source_updated_at,
-    fetchedAt: row.fetched_at,
-    status: row.status,
+    slug: row.slug as string,
+    area: row.area as string,
+    payload: JSON.parse(row.payload as string) as T,
+    sourceLabel: row.source_label as string,
+    sourceUpdatedAt: row.source_updated_at as string | null,
+    fetchedAt: row.fetched_at as string,
+    status: row.status as LiveSignalCacheStatus,
   };
 }
 
-export function getCachedSignalRecord<T>(slug: string, area: string): CachedSignalRecord<T> | null {
+export async function getCachedSignalRecord<T>(slug: string, area: string): Promise<CachedSignalRecord<T> | null> {
   return getCacheRow<T>(slug, area);
 }
 
@@ -213,10 +204,10 @@ export function isCacheFresh(fetchedAt: string, ttlMs: number, now = Date.now())
   return now - new Date(fetchedAt).getTime() <= ttlMs;
 }
 
-export function upsertCachedSignalRecord<T>(input: CachedSignalRecord<T>) {
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO live_signal_cache
+export async function upsertCachedSignalRecord<T>(input: CachedSignalRecord<T>) {
+  const db = getClient();
+  await db.execute({
+    sql: `INSERT INTO live_signal_cache
       (slug, area, payload, source_label, source_updated_at, fetched_at, status, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(slug, area)
@@ -226,17 +217,18 @@ export function upsertCachedSignalRecord<T>(input: CachedSignalRecord<T>) {
        source_updated_at = excluded.source_updated_at,
        fetched_at = excluded.fetched_at,
        status = excluded.status,
-       updated_at = excluded.updated_at`
-  ).run(
-    input.slug,
-    input.area,
-    JSON.stringify(input.payload),
-    input.sourceLabel,
-    input.sourceUpdatedAt,
-    input.fetchedAt,
-    input.status,
-    input.fetchedAt
-  );
+       updated_at = excluded.updated_at`,
+    args: [
+      input.slug,
+      input.area,
+      JSON.stringify(input.payload),
+      input.sourceLabel,
+      input.sourceUpdatedAt,
+      input.fetchedAt,
+      input.status,
+      input.fetchedAt,
+    ],
+  });
 }
 
 function getBandFromUsAqi(
@@ -378,7 +370,7 @@ export async function getLiveAirQuality(area: string = 'bangkok'): Promise<LiveA
     throw new Error('Only bangkok is available in this MVP.');
   }
 
-  const cached = getCacheRow<LiveAirQualityReading>('air-quality', area);
+  const cached = await getCacheRow<LiveAirQualityReading>('air-quality', area);
   if (cached && isCacheFresh(cached.fetchedAt, AIR_CACHE_TTL_MS)) {
     return {
       ...cached.payload,
@@ -391,7 +383,7 @@ export async function getLiveAirQuality(area: string = 'bangkok'): Promise<LiveA
 
   try {
     const fresh = await fetchBangkokAirQualityFromSource();
-    upsertCachedSignalRecord<LiveAirQualityReading>({
+    await upsertCachedSignalRecord<LiveAirQualityReading>({
       slug: 'air-quality',
       area,
       payload: fresh,
@@ -413,7 +405,7 @@ export async function getLiveAirQuality(area: string = 'bangkok'): Promise<LiveA
         note: 'Upstream fetch failed. Showing the last trustworthy cached reading.',
       });
 
-      upsertCachedSignalRecord<LiveAirQualityReading>({
+      await upsertCachedSignalRecord<LiveAirQualityReading>({
         slug: 'air-quality',
         area,
         payload: staleReading,
@@ -439,7 +431,7 @@ export async function getLiveAirQuality(area: string = 'bangkok'): Promise<LiveA
           : 'Live air feed unavailable.',
     });
 
-    upsertCachedSignalRecord<LiveAirQualityReading>({
+    await upsertCachedSignalRecord<LiveAirQualityReading>({
       slug: 'air-quality',
       area,
       payload: failedReading,

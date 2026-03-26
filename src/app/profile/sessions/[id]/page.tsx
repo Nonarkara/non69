@@ -35,7 +35,7 @@ export default async function SessionDetailPage({
     notFound();
   }
 
-  const conversation = getConversationByIdForUser(user.id, conversationId);
+  const conversation = await getConversationByIdForUser(user.id, conversationId);
   if (!conversation) {
     notFound();
   }

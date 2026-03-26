@@ -27,7 +27,7 @@ export default async function MeetingDetailPage({
     notFound();
   }
 
-  const session = getMeetingSessionByIdForUser(user.id, sessionId);
+  const session = await getMeetingSessionByIdForUser(user.id, sessionId);
   if (!session) {
     notFound();
   }

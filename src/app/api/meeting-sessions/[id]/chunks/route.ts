@@ -15,7 +15,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const user = getUserFromRequest(request);
+  const user = await getUserFromRequest(request);
   if (!user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -41,7 +41,7 @@ export async function POST(
   }
 
   try {
-    setMeetingSessionStatus(user.id, sessionId, 'processing');
+    await setMeetingSessionStatus(user.id, sessionId, 'processing');
 
     let transcriptChunk = typeof body.text === 'string' ? body.text.trim() : '';
     if (!transcriptChunk && body.audioBase64) {
@@ -52,17 +52,17 @@ export async function POST(
     }
 
     if (!transcriptChunk) {
-      const session = getMeetingSessionByIdForUser(user.id, sessionId);
+      const session = await getMeetingSessionByIdForUser(user.id, sessionId);
       return Response.json({ session });
     }
 
-    const appended = appendMeetingTranscriptChunk(user.id, sessionId, transcriptChunk);
+    const appended = await appendMeetingTranscriptChunk(user.id, sessionId, transcriptChunk);
     if (!appended) {
       return Response.json({ error: 'Meeting session not found.' }, { status: 404 });
     }
 
     const research = await generateMeetingInsights(appended.transcript);
-    const updated = updateMeetingSessionInsights(
+    const updated = await updateMeetingSessionInsights(
       user.id,
       sessionId,
       research.insights,
@@ -71,7 +71,7 @@ export async function POST(
 
     return Response.json({ session: updated ?? appended });
   } catch (error) {
-    setMeetingSessionStatus(user.id, sessionId, 'listening');
+    await setMeetingSessionStatus(user.id, sessionId, 'listening');
     const message = error instanceof Error ? error.message : 'Could not process meeting chunk.';
     return Response.json({ error: message }, { status: 400 });
   }

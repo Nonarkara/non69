@@ -15,7 +15,7 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const user = getUserFromRequest(request);
+  const user = await getUserFromRequest(request);
   if (!user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -26,7 +26,7 @@ export async function GET(
     return Response.json({ error: 'Invalid meeting session id.' }, { status: 400 });
   }
 
-  const session = getMeetingSessionByIdForUser(user.id, sessionId);
+  const session = await getMeetingSessionByIdForUser(user.id, sessionId);
   if (!session) {
     return Response.json({ error: 'Meeting session not found.' }, { status: 404 });
   }
@@ -34,7 +34,7 @@ export async function GET(
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
-    start(controller) {
+    async start(controller) {
       let lastEventId = 0;
       let closed = false;
 
@@ -44,8 +44,8 @@ export async function GET(
         }
       };
 
-      const syncEvents = () => {
-        const events = listMeetingSessionEventsAfterId(user.id, sessionId, lastEventId);
+      const syncEvents = async () => {
+        const events = await listMeetingSessionEventsAfterId(user.id, sessionId, lastEventId);
         if (!events) {
           push({ type: 'error', error: 'Meeting session not found.' });
           closed = true;
@@ -66,7 +66,7 @@ export async function GET(
         type: 'snapshot',
         session,
       });
-      syncEvents();
+      await syncEvents();
 
       const interval = setInterval(syncEvents, 1000);
       const heartbeat = setInterval(() => {

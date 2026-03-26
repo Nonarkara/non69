@@ -47,11 +47,11 @@ export async function POST(request: Request) {
 
         // Post-stream: log analysis and extract predictions
         try {
-          logAnalysis('th', question, fullResponse);
+          await logAnalysis('th', question, fullResponse);
 
           const predictions = extractPredictions(fullResponse);
           for (const pred of predictions) {
-            insertIntelMemory({
+            await insertIntelMemory({
               geography: 'th',
               kind: 'prediction',
               claim: pred.claim,

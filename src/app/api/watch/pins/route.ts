@@ -4,8 +4,8 @@ import { listSavedWatchItemsForUser, removeSavedWatchItem, saveWatchItem } from 
 
 export const runtime = 'nodejs';
 
-function requireUser(request: NextRequest) {
-  const user = getUserFromRequest(request);
+async function requireUser(request: NextRequest) {
+  const user = await getUserFromRequest(request);
   if (!user) {
     return null;
   }
@@ -14,16 +14,16 @@ function requireUser(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  const user = requireUser(request);
+  const user = await requireUser(request);
   if (!user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  return Response.json({ items: listSavedWatchItemsForUser(user.id) });
+  return Response.json({ items: await listSavedWatchItemsForUser(user.id) });
 }
 
 export async function POST(request: NextRequest) {
-  const user = requireUser(request);
+  const user = await requireUser(request);
   if (!user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -38,12 +38,12 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Invalid saved item request.' }, { status: 400 });
   }
 
-  saveWatchItem(user.id, body.geography, body.itemKind, body.itemSlug);
+  await saveWatchItem(user.id, body.geography, body.itemKind, body.itemSlug);
   return Response.json({ ok: true });
 }
 
 export async function DELETE(request: NextRequest) {
-  const user = requireUser(request);
+  const user = await requireUser(request);
   if (!user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -58,6 +58,6 @@ export async function DELETE(request: NextRequest) {
     return Response.json({ error: 'Invalid saved item request.' }, { status: 400 });
   }
 
-  removeSavedWatchItem(user.id, body.geography, body.itemKind, body.itemSlug);
+  await removeSavedWatchItem(user.id, body.geography, body.itemKind, body.itemSlug);
   return Response.json({ ok: true });
 }

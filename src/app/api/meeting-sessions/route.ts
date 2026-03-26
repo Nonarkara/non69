@@ -6,13 +6,13 @@ import type { NextRequest } from 'next/server';
 export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
-  const user = getUserFromRequest(request);
+  const user = await getUserFromRequest(request);
   if (!user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const body = (await request.json().catch(() => null)) as { languageMode?: string } | null;
-  const session = createMeetingSession(user.id, body?.languageMode || 'th-en');
+  const session = await createMeetingSession(user.id, body?.languageMode || 'th-en');
 
   return Response.json({
     session,

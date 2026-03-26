@@ -44,11 +44,11 @@ export async function POST() {
           const headlineMatch = fullResponse.match(/##\s*HEADLINE\s*\n+(.+)/i);
           const headline = headlineMatch?.[1]?.trim() || 'Daily Intelligence Brief';
 
-          const briefId = insertIntelBrief('th', headline, fullResponse, context);
+          const briefId = await insertIntelBrief('th', headline, fullResponse, context);
 
           const predictions = extractPredictions(fullResponse);
           for (const pred of predictions) {
-            insertIntelMemory({
+            await insertIntelMemory({
               geography: 'th',
               kind: 'prediction',
               claim: pred.claim,

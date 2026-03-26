@@ -24,9 +24,9 @@ export async function PATCH(
   }
 
   try {
-    const updatedUser = updateUserAdminRole(user.id, targetUserId, body.isAdmin);
+    const updatedUser = await updateUserAdminRole(user.id, targetUserId, body.isAdmin);
 
-    trackEvent('admin_role_update', {
+    await trackEvent('admin_role_update', {
       actorUserId: user.id,
       targetUserId,
       isAdmin: updatedUser.is_admin,

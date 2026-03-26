@@ -8,7 +8,7 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const user = getUserFromRequest(request);
+  const user = await getUserFromRequest(request);
   if (!user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -20,7 +20,7 @@ export async function GET(
     return Response.json({ error: 'Invalid conversation id.' }, { status: 400 });
   }
 
-  const conversation = getConversationByIdForUser(user.id, conversationId);
+  const conversation = await getConversationByIdForUser(user.id, conversationId);
   if (!conversation) {
     return Response.json({ error: 'Conversation not found.' }, { status: 404 });
   }

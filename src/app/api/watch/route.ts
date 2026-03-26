@@ -11,7 +11,7 @@ export async function GET(request: Request) {
     return Response.json({ error: 'Only th is available in this MVP.' }, { status: 400 });
   }
 
-  const bundle = getWatchBundle(geography);
+  const bundle = await getWatchBundle(geography);
   if (!bundle) {
     return Response.json({ error: 'Watch data unavailable.' }, { status: 404 });
   }
@@ -130,12 +130,12 @@ export async function PATCH(request: Request) {
       })),
     }));
 
-    const result = publishWatchBundle(body.geography, briefInput, signalInputs, {
+    const result = await publishWatchBundle(body.geography, briefInput, signalInputs, {
       userId: user.id,
       displayName: user.display_name,
     });
 
-    trackEvent('watch_publish', {
+    await trackEvent('watch_publish', {
       geography: body.geography,
       revisionId: result.revision.id,
       version: result.revision.version,

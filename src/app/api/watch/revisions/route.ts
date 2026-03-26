@@ -17,7 +17,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    return Response.json({ revisions: listWatchRevisions(geography) });
+    return Response.json({ revisions: await listWatchRevisions(geography) });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Could not load watch revision history.';

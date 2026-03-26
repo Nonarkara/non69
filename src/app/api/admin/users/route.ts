@@ -9,7 +9,7 @@ export async function GET() {
   }
 
   try {
-    return Response.json({ users: listUsersForAdmin() });
+    return Response.json({ users: await listUsersForAdmin() });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not load admin users.';
     return Response.json({ error: message }, { status: 400 });

@@ -71,11 +71,11 @@ export default async function WatchPage({
 }) {
   const params = await searchParams;
   const scene = resolveScene(params.scene);
-  const bundle = getWatchBundle('th');
-  const revisions = listWatchRevisions('th');
+  const bundle = await getWatchBundle('th');
+  const revisions = await listWatchRevisions('th');
   const currentRevision = revisions[0] ?? null;
   const user = await getCurrentUser();
-  const savedItems = user ? listSavedWatchItemsForUser(user.id) : [];
+  const savedItems = user ? await listSavedWatchItemsForUser(user.id) : [];
   const savedSet = new Set(savedItems.map(i => `${i.itemKind}:${i.itemSlug}`));
 
   const [liveAir, liveWeather, newsItems, hourly] = await Promise.all([
@@ -86,11 +86,11 @@ export default async function WatchPage({
   ]);
 
   // Platform data
-  const pulse = getPlatformPulse();
-  const nonisms = getRandomNonisms(8);
+  const pulse = await getPlatformPulse();
+  const nonisms = await getRandomNonisms(8);
 
   // Signal history for sparkline charts
-  const historyRows = getSignalHistory('th', 30);
+  const historyRows = await getSignalHistory('th', 30);
   const chartData: Record<string, Array<{ value: number; date: string }>> = {};
   for (const row of historyRows) {
     if (!chartData[row.signalSlug]) chartData[row.signalSlug] = [];

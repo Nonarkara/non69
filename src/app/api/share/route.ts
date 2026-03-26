@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Invalid share request' }, { status: 400 });
   }
 
-  trackEvent('share', {
+  await trackEvent('share', {
     kind: body.kind,
     mode: body.mode ?? null,
     geography: body.geography ?? null,

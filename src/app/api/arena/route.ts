@@ -44,7 +44,7 @@ Return your response as JSON:
 IMPORTANT: Be willing to let the user WIN if their argument is genuinely better. Don't be biased toward yourself. Dr. Non says: "The power of logic is limitless" — let logic decide.`;
 
 export async function POST(req: NextRequest) {
-  const user = getUserFromRequest(req);
+  const user = await getUserFromRequest(req);
   if (!user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Argument required' }, { status: 400 });
   }
 
-  trackEvent('arena_debate', {
+  await trackEvent('arena_debate', {
     topicId: body.topicId,
     round: body.round,
     wordCount: body.userArgument.split(/\s+/).length,
@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
 
     if (jsonMatch) {
       const data = JSON.parse(jsonMatch[0]);
-      createPracticeRun({
+      await createPracticeRun({
         userId: user.id,
         tool: 'arena',
         itemId: body.topicId,

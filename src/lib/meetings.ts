@@ -1,4 +1,4 @@
-import { getDb } from '@/lib/db';
+import { getClient } from '@/lib/db';
 
 export type MeetingSessionStatus = 'listening' | 'processing' | 'finished';
 
@@ -52,9 +52,10 @@ export interface MeetingSessionEvent {
   createdAt: string;
 }
 
-function parseJsonArray<T>(raw: string, fallback: T[] = []): T[] {
+function parseJsonArray<T>(raw: string | unknown, fallback: T[] = []): T[] {
   try {
-    const parsed = JSON.parse(raw) as unknown;
+    const str = typeof raw === 'string' ? raw : JSON.stringify(raw);
+    const parsed = JSON.parse(str) as unknown;
     return Array.isArray(parsed) ? (parsed as T[]) : fallback;
   } catch {
     return fallback;
@@ -63,19 +64,13 @@ function parseJsonArray<T>(raw: string, fallback: T[] = []): T[] {
 
 function buildMeetingTitle(transcript: string) {
   const normalized = transcript.replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return 'Meeting mode';
-  }
-
+  if (!normalized) return 'Meeting mode';
   return normalized.length > 72 ? `${normalized.slice(0, 69)}...` : normalized;
 }
 
 function extractTranscriptPreview(transcript: string) {
   const normalized = transcript.replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return 'No transcript yet.';
-  }
-
+  if (!normalized) return 'No transcript yet.';
   return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
 }
 
@@ -83,347 +78,192 @@ function dedupeCitations(citations: MeetingCitation[]) {
   const seen = new Set<string>();
   return citations.filter(citation => {
     const key = `${citation.label}|${citation.url}|${citation.note}`;
-    if (seen.has(key)) {
-      return false;
-    }
-
+    if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 }
 
-function mapMeetingRow(
-  row:
-    | {
-        id: number;
-        user_id: number;
-        title: string;
-        status: MeetingSessionStatus;
-        language_mode: string;
-        transcript: string;
-        insights: string;
-        suggested_responses: string;
-        citations: string;
-        started_at: string;
-        created_at: string;
-        updated_at: string;
-        ended_at: string | null;
-      }
-    | undefined
-): MeetingSessionDetail | null {
-  if (!row) {
-    return null;
-  }
+function mapMeetingRow(row: Record<string, unknown> | undefined): MeetingSessionDetail | null {
+  if (!row) return null;
 
-  const insights = parseJsonArray<MeetingInsight>(row.insights);
-  const suggestedResponses = parseJsonArray<MeetingSuggestedResponse>(row.suggested_responses);
-  const citations = parseJsonArray<MeetingCitation>(row.citations);
+  const insights = parseJsonArray<MeetingInsight>(row.insights as string);
+  const suggestedResponses = parseJsonArray<MeetingSuggestedResponse>(row.suggested_responses as string);
+  const citations = parseJsonArray<MeetingCitation>(row.citations as string);
 
   return {
-    id: row.id,
-    userId: row.user_id,
-    title: row.title || 'Meeting mode',
-    status: row.status,
-    languageMode: row.language_mode,
-    transcript: row.transcript,
-    transcriptPreview: extractTranscriptPreview(row.transcript),
+    id: Number(row.id),
+    userId: Number(row.user_id),
+    title: String(row.title || 'Meeting mode'),
+    status: String(row.status) as MeetingSessionStatus,
+    languageMode: String(row.language_mode),
+    transcript: String(row.transcript ?? ''),
+    transcriptPreview: extractTranscriptPreview(String(row.transcript ?? '')),
     insightCount: insights.length,
     insights,
     suggestedResponses,
     citations,
-    startedAt: row.started_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    endedAt: row.ended_at,
+    startedAt: String(row.started_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    endedAt: row.ended_at ? String(row.ended_at) : null,
   };
 }
 
-function insertMeetingEvent(
+async function insertMeetingEvent(
   sessionId: number,
   eventType: MeetingSessionEvent['eventType'],
   payload: Record<string, unknown>
 ) {
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO meeting_session_events (session_id, event_type, payload)
-     VALUES (?, ?, ?)`
-  ).run(sessionId, eventType, JSON.stringify(payload));
+  await getClient().execute({
+    sql: `INSERT INTO meeting_session_events (session_id, event_type, payload) VALUES (?, ?, ?)`,
+    args: [sessionId, eventType, JSON.stringify(payload)],
+  });
 }
 
-function getOwnedMeetingSessionRow(userId: number, sessionId: number) {
-  const db = getDb();
-  return db
-    .prepare(
-      `SELECT
-         id,
-         user_id,
-         title,
-         status,
-         language_mode,
-         transcript,
-         insights,
-         suggested_responses,
-         citations,
-         started_at,
-         created_at,
-         updated_at,
-         ended_at
-       FROM meeting_sessions
-       WHERE id = ? AND user_id = ?`
-    )
-    .get(sessionId, userId) as
-    | {
-        id: number;
-        user_id: number;
-        title: string;
-        status: MeetingSessionStatus;
-        language_mode: string;
-        transcript: string;
-        insights: string;
-        suggested_responses: string;
-        citations: string;
-        started_at: string;
-        created_at: string;
-        updated_at: string;
-        ended_at: string | null;
-      }
-    | undefined;
+async function getOwnedMeetingSessionRow(userId: number, sessionId: number) {
+  const { rows } = await getClient().execute({
+    sql: `SELECT id, user_id, title, status, language_mode, transcript, insights, suggested_responses, citations, started_at, created_at, updated_at, ended_at
+          FROM meeting_sessions WHERE id = ? AND user_id = ?`,
+    args: [sessionId, userId],
+  });
+  return rows[0] as Record<string, unknown> | undefined;
 }
 
-export function createMeetingSession(userId: number, languageMode = 'th-en') {
-  const db = getDb();
-  const result = db
-    .prepare(
-      `INSERT INTO meeting_sessions (user_id, title, status, language_mode)
-       VALUES (?, ?, 'listening', ?)`
-    )
-    .run(userId, 'Meeting mode', languageMode);
-
+export async function createMeetingSession(userId: number, languageMode = 'th-en') {
+  const result = await getClient().execute({
+    sql: `INSERT INTO meeting_sessions (user_id, title, status, language_mode) VALUES (?, ?, 'listening', ?)`,
+    args: [userId, 'Meeting mode', languageMode],
+  });
   const sessionId = Number(result.lastInsertRowid);
-  insertMeetingEvent(sessionId, 'status', { status: 'listening' });
-  return getMeetingSessionByIdForUser(userId, sessionId);
+  await insertMeetingEvent(sessionId, 'status', { status: 'listening' });
+  return await getMeetingSessionByIdForUser(userId, sessionId);
 }
 
-export function appendMeetingTranscriptChunk(userId: number, sessionId: number, text: string) {
-  const db = getDb();
-  const row = getOwnedMeetingSessionRow(userId, sessionId);
-
-  if (!row) {
-    return null;
-  }
-
-  if (row.status === 'finished') {
-    throw new Error('This meeting session is already finished.');
-  }
+export async function appendMeetingTranscriptChunk(userId: number, sessionId: number, text: string) {
+  const row = await getOwnedMeetingSessionRow(userId, sessionId);
+  if (!row) return null;
+  if (String(row.status) === 'finished') throw new Error('This meeting session is already finished.');
 
   const chunk = text.trim();
-  if (!chunk) {
-    return mapMeetingRow(row);
-  }
+  if (!chunk) return mapMeetingRow(row);
 
-  const transcript = row.transcript.trim() ? `${row.transcript.trim()}\n${chunk}` : chunk;
+  const prev = String(row.transcript ?? '').trim();
+  const transcript = prev ? `${prev}\n${chunk}` : chunk;
   const title = buildMeetingTitle(transcript);
 
-  db.prepare(
-    `UPDATE meeting_sessions
-     SET transcript = ?, title = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND user_id = ?`
-  ).run(transcript, title, sessionId, userId);
-
-  insertMeetingEvent(sessionId, 'transcript', {
-    text: chunk,
-    transcript,
+  await getClient().execute({
+    sql: `UPDATE meeting_sessions SET transcript = ?, title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`,
+    args: [transcript, title, sessionId, userId],
   });
 
-  return getMeetingSessionByIdForUser(userId, sessionId);
+  await insertMeetingEvent(sessionId, 'transcript', { text: chunk, transcript });
+  return await getMeetingSessionByIdForUser(userId, sessionId);
 }
 
-export function updateMeetingSessionInsights(
+export async function updateMeetingSessionInsights(
   userId: number,
   sessionId: number,
   insights: MeetingInsight[],
   suggestedResponses: MeetingSuggestedResponse[]
 ) {
-  const db = getDb();
-  const row = getOwnedMeetingSessionRow(userId, sessionId);
-
-  if (!row) {
-    return null;
-  }
-
-  if (row.status === 'finished') {
-    throw new Error('This meeting session is already finished.');
-  }
+  const row = await getOwnedMeetingSessionRow(userId, sessionId);
+  if (!row) return null;
+  if (String(row.status) === 'finished') throw new Error('This meeting session is already finished.');
 
   const citations = dedupeCitations([
-    ...insights.flatMap(insight => insight.citations),
-    ...suggestedResponses.flatMap(response => response.citations),
+    ...insights.flatMap(i => i.citations),
+    ...suggestedResponses.flatMap(r => r.citations),
   ]);
 
-  db.prepare(
-    `UPDATE meeting_sessions
-     SET status = 'listening',
-         insights = ?,
-         suggested_responses = ?,
-         citations = ?,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND user_id = ?`
-  ).run(
-    JSON.stringify(insights),
-    JSON.stringify(suggestedResponses),
-    JSON.stringify(citations),
-    sessionId,
-    userId
-  );
-
-  insertMeetingEvent(sessionId, 'insight', {
-    insights,
-  });
-  insertMeetingEvent(sessionId, 'response', {
-    suggestedResponses,
+  await getClient().execute({
+    sql: `UPDATE meeting_sessions SET status = 'listening', insights = ?, suggested_responses = ?, citations = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`,
+    args: [JSON.stringify(insights), JSON.stringify(suggestedResponses), JSON.stringify(citations), sessionId, userId],
   });
 
-  return getMeetingSessionByIdForUser(userId, sessionId);
+  await insertMeetingEvent(sessionId, 'insight', { insights });
+  await insertMeetingEvent(sessionId, 'response', { suggestedResponses });
+  return await getMeetingSessionByIdForUser(userId, sessionId);
 }
 
-export function setMeetingSessionStatus(
+export async function setMeetingSessionStatus(
   userId: number,
   sessionId: number,
   status: Extract<MeetingSessionStatus, 'listening' | 'processing'>
 ) {
-  const db = getDb();
-  const result = db
-    .prepare(
-      `UPDATE meeting_sessions
-       SET status = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND user_id = ? AND status != 'finished'`
-    )
-    .run(status, sessionId, userId);
+  const result = await getClient().execute({
+    sql: `UPDATE meeting_sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND status != 'finished'`,
+    args: [status, sessionId, userId],
+  });
 
-  if (result.changes === 0) {
-    return null;
-  }
+  if (result.rowsAffected === 0) return null;
 
-  insertMeetingEvent(sessionId, 'status', { status });
-  return getMeetingSessionByIdForUser(userId, sessionId);
+  await insertMeetingEvent(sessionId, 'status', { status });
+  return await getMeetingSessionByIdForUser(userId, sessionId);
 }
 
-export function finishMeetingSession(userId: number, sessionId: number) {
-  const db = getDb();
-  const row = getOwnedMeetingSessionRow(userId, sessionId);
-  if (!row) {
-    return null;
-  }
+export async function finishMeetingSession(userId: number, sessionId: number) {
+  const row = await getOwnedMeetingSessionRow(userId, sessionId);
+  if (!row) return null;
 
-  const title = buildMeetingTitle(row.transcript);
-  db.prepare(
-    `UPDATE meeting_sessions
-     SET title = ?, status = 'finished', ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND user_id = ?`
-  ).run(title, sessionId, userId);
+  const title = buildMeetingTitle(String(row.transcript ?? ''));
+  await getClient().execute({
+    sql: `UPDATE meeting_sessions SET title = ?, status = 'finished', ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`,
+    args: [title, sessionId, userId],
+  });
 
-  insertMeetingEvent(sessionId, 'status', { status: 'finished' });
-  return getMeetingSessionByIdForUser(userId, sessionId);
+  await insertMeetingEvent(sessionId, 'status', { status: 'finished' });
+  return await getMeetingSessionByIdForUser(userId, sessionId);
 }
 
-export function getMeetingSessionByIdForUser(userId: number, sessionId: number) {
-  return mapMeetingRow(getOwnedMeetingSessionRow(userId, sessionId));
+export async function getMeetingSessionByIdForUser(userId: number, sessionId: number) {
+  return mapMeetingRow(await getOwnedMeetingSessionRow(userId, sessionId));
 }
 
-export function listMeetingSessionsForUser(userId: number, limit = 8): MeetingSessionSummary[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT
-         id,
-         user_id,
-         title,
-         status,
-         language_mode,
-         transcript,
-         insights,
-         suggested_responses,
-         citations,
-         started_at,
-         created_at,
-         updated_at,
-         ended_at
-       FROM meeting_sessions
-       WHERE user_id = ?
-       ORDER BY updated_at DESC, id DESC
-       LIMIT ?`
-    )
-    .all(userId, limit) as Array<{
-    id: number;
-    user_id: number;
-    title: string;
-    status: MeetingSessionStatus;
-    language_mode: string;
-    transcript: string;
-    insights: string;
-    suggested_responses: string;
-    citations: string;
-    started_at: string;
-    created_at: string;
-    updated_at: string;
-    ended_at: string | null;
-  }>;
+export async function listMeetingSessionsForUser(userId: number, limit = 8): Promise<MeetingSessionSummary[]> {
+  const { rows } = await getClient().execute({
+    sql: `SELECT id, user_id, title, status, language_mode, transcript, insights, suggested_responses, citations, started_at, created_at, updated_at, ended_at
+          FROM meeting_sessions WHERE user_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?`,
+    args: [userId, limit],
+  });
 
-  return rows
+  return (rows as Array<Record<string, unknown>>)
     .map(row => mapMeetingRow(row))
-    .filter((session): session is MeetingSessionDetail => session !== null)
-    .map(session => ({
-      id: session.id,
-      title: session.title,
-      status: session.status,
-      transcriptPreview: session.transcriptPreview,
-      insightCount: session.insightCount,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-      endedAt: session.endedAt,
+    .filter((s): s is MeetingSessionDetail => s !== null)
+    .map(s => ({
+      id: s.id,
+      title: s.title,
+      status: s.status,
+      transcriptPreview: s.transcriptPreview,
+      insightCount: s.insightCount,
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+      endedAt: s.endedAt,
     }));
 }
 
-export function countMeetingSessionsForUser(userId: number) {
-  const db = getDb();
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) as count
-       FROM meeting_sessions
-       WHERE user_id = ?`
-    )
-    .get(userId) as { count: number };
-
-  return row.count;
+export async function countMeetingSessionsForUser(userId: number) {
+  const { rows } = await getClient().execute({
+    sql: `SELECT COUNT(*) as count FROM meeting_sessions WHERE user_id = ?`,
+    args: [userId],
+  });
+  return Number(rows[0]?.count ?? 0);
 }
 
-export function listMeetingSessionEventsAfterId(userId: number, sessionId: number, afterId = 0) {
-  const session = getOwnedMeetingSessionRow(userId, sessionId);
-  if (!session) {
-    return null;
-  }
+export async function listMeetingSessionEventsAfterId(userId: number, sessionId: number, afterId = 0) {
+  const session = await getOwnedMeetingSessionRow(userId, sessionId);
+  if (!session) return null;
 
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT id, session_id, event_type, payload, created_at
-       FROM meeting_session_events
-       WHERE session_id = ? AND id > ?
-       ORDER BY id ASC`
-    )
-    .all(sessionId, afterId) as Array<{
-    id: number;
-    session_id: number;
-    event_type: MeetingSessionEvent['eventType'];
-    payload: string;
-    created_at: string;
-  }>;
+  const { rows } = await getClient().execute({
+    sql: `SELECT id, session_id, event_type, payload, created_at FROM meeting_session_events WHERE session_id = ? AND id > ? ORDER BY id ASC`,
+    args: [sessionId, afterId],
+  });
 
-  return rows.map(row => ({
-    id: row.id,
-    sessionId: row.session_id,
-    eventType: row.event_type,
-    payload: JSON.parse(row.payload) as Record<string, unknown>,
-    createdAt: row.created_at,
+  return (rows as Array<Record<string, unknown>>).map(row => ({
+    id: Number(row.id),
+    sessionId: Number(row.session_id),
+    eventType: String(row.event_type) as MeetingSessionEvent['eventType'],
+    payload: JSON.parse(String(row.payload)) as Record<string, unknown>,
+    createdAt: String(row.created_at),
   }));
 }

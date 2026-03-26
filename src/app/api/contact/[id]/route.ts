@@ -22,7 +22,7 @@ export async function PATCH(
     return Response.json({ error: 'Invalid contact request update.' }, { status: 400 });
   }
 
-  const updated = updateContactRequestStatus(requestId, body.status);
+  const updated = await updateContactRequestStatus(requestId, body.status);
   if (!updated) {
     return Response.json({ error: 'Contact request not found.' }, { status: 404 });
   }

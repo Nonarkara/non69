@@ -9,9 +9,9 @@ import { searchStac, BBOX_THAILAND } from './stac';
  * Gathers: watch signals, live env data, news, STAC satellite metadata, memory.
  */
 export async function buildAnalysisContext(geography: string): Promise<string> {
-  const bundle = getWatchBundle(geography);
-  const memory = getIntelMemoryForContext(geography, 15);
-  const recentAnalyses = getRecentAnalyses(geography, 3);
+  const bundle = await getWatchBundle(geography);
+  const memory = await getIntelMemoryForContext(geography, 15);
+  const recentAnalyses = await getRecentAnalyses(geography, 3);
 
   const [air, weather, news, stac] = await Promise.all([
     getLiveAirQuality('bangkok').catch(() => null),

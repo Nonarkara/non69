@@ -19,7 +19,7 @@ export async function GET(
   }
 
   try {
-    const revision = getWatchRevisionById(revisionId);
+    const revision = await getWatchRevisionById(revisionId);
     if (!revision) {
       return Response.json({ error: 'Watch revision not found.' }, { status: 404 });
     }

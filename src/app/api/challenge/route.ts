@@ -10,7 +10,7 @@ const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-20250514';
 
 // GET: Fetch today's challenge
 export async function GET(req: NextRequest) {
-  const user = getUserFromRequest(req);
+  const user = await getUserFromRequest(req);
   if (!user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -18,14 +18,14 @@ export async function GET(req: NextRequest) {
   const challenge = getDailyChallenge();
   return Response.json({
     challenge,
-    streak: getChallengeStreak(user.id),
+    streak: await getChallengeStreak(user.id),
     totalChallenges: getAllChallenges().length,
   });
 }
 
 // POST: Submit response for evaluation
 export async function POST(req: NextRequest) {
-  const user = getUserFromRequest(req);
+  const user = await getUserFromRequest(req);
   if (!user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Response required' }, { status: 400 });
   }
 
-  trackEvent('challenge_submit', {
+  await trackEvent('challenge_submit', {
     challengeId: body.challengeId,
     wordCount: body.response.split(/\s+/).length,
     timeUsed: body.timeUsed,
@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
         scores.overall_score = (scores.logic_score + scores.clarity_score + scores.depth_score + scores.courage_score) / 4;
       }
 
-      createPracticeRun({
+      await createPracticeRun({
         userId: user.id,
         tool: 'challenge',
         itemId: challenge.id,
@@ -92,7 +92,7 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      return Response.json({ scores, streak: getChallengeStreak(user.id) });
+      return Response.json({ scores, streak: await getChallengeStreak(user.id) });
     }
 
     throw new Error('Invalid response format');
@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
         strengths: ['You completed the challenge'],
         growth_areas: ['Try again when the AI is available for detailed feedback'],
       },
-      streak: getChallengeStreak(user.id),
+      streak: await getChallengeStreak(user.id),
     });
   }
 }

@@ -36,7 +36,7 @@ const receipts = [
 ];
 
 export default async function HomePage() {
-  const bundle = getWatchBundle('th');
+  const bundle = await getWatchBundle('th');
   const previewSignals = bundle?.signals.slice(0, 4) ?? [];
 
   return (

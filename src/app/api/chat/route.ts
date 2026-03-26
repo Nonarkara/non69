@@ -11,7 +11,7 @@ import { getUserFromRequest } from '@/lib/auth';
 export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
-  const user = getUserFromRequest(req);
+  const user = await getUserFromRequest(req);
   if (!user) {
     return Response.json({ error: 'Please sign in to use the private lab.' }, { status: 401 });
   }
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    trackEvent('chat_session', {
+    await trackEvent('chat_session', {
       mode,
       messageCount: messages.length,
       timestamp: new Date().toISOString(),
@@ -76,9 +76,9 @@ export async function POST(req: NextRequest) {
           ];
           const persistedConversationId =
             conversationId == null
-              ? createConversation(user.id, mode, transcript)
-              : updateConversation(user.id, conversationId, mode, transcript) ??
-                createConversation(user.id, mode, transcript);
+              ? await createConversation(user.id, mode, transcript)
+              : (await updateConversation(user.id, conversationId, mode, transcript)) ??
+                (await createConversation(user.id, mode, transcript));
 
           controller.enqueue(
             encoder.encode(

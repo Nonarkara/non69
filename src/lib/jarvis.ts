@@ -13,7 +13,7 @@ const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-20250514';
 
 interface JarvisContext {
   transcript: string;
-  watchBundle: ReturnType<typeof getWatchBundle>;
+  watchBundle: Awaited<ReturnType<typeof getWatchBundle>>;
   liveAir: Awaited<ReturnType<typeof getLiveAirQuality>>;
   macro: MacroComparisonSnapshot;
 }
@@ -258,7 +258,7 @@ Keep it brutally concise, source-backed, and useful in a live room. No markdown.
 }
 
 export async function generateMeetingInsights(transcript: string) {
-  const watchBundle = getWatchBundle('th');
+  const watchBundle = await getWatchBundle('th');
   const [liveAir, macro, webResearch] = await Promise.all([
     getLiveAirQuality('bangkok'),
     getMacroComparisonSnapshot(transcript),

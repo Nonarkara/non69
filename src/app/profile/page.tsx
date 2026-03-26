@@ -36,13 +36,13 @@ export default async function ProfilePage() {
     redirect('/access?next=/profile');
   }
 
-  const stats = getProfileStats(user.id);
-  const challengeStreak = getChallengeStreak(user.id);
-  const conversations = listConversationsForUser(user.id).slice(0, 8);
-  const savedItems = listSavedWatchItemsForUser(user.id);
-  const practiceRuns = listPracticeRunsForUser(user.id, 8);
-  const meetingSessions = listMeetingSessionsForUser(user.id, 6);
-  const meetingCount = countMeetingSessionsForUser(user.id);
+  const stats = await getProfileStats(user.id);
+  const challengeStreak = await getChallengeStreak(user.id);
+  const conversations = (await listConversationsForUser(user.id)).slice(0, 8);
+  const savedItems = await listSavedWatchItemsForUser(user.id);
+  const practiceRuns = await listPracticeRunsForUser(user.id, 8);
+  const meetingSessions = await listMeetingSessionsForUser(user.id, 6);
+  const meetingCount = await countMeetingSessionsForUser(user.id);
 
   return (
     <main className="flex-1">

@@ -282,7 +282,7 @@ function mapCachedMacroRecord(
 export async function getMacroComparisonSnapshot(transcript: string): Promise<MacroComparisonSnapshot> {
   const countries = extractCountryMatches(transcript);
   const area = buildCacheArea(countries);
-  const cached = getCachedSignalRecord<MacroComparisonSnapshot>('macro-comparison', area);
+  const cached = await getCachedSignalRecord<MacroComparisonSnapshot>('macro-comparison', area);
 
   if (cached && isCacheFresh(cached.fetchedAt, MACRO_CACHE_TTL_MS)) {
     return mapCachedMacroRecord(cached) as MacroComparisonSnapshot;
@@ -297,7 +297,7 @@ export async function getMacroComparisonSnapshot(transcript: string): Promise<Ma
       stale: false,
     };
 
-    upsertCachedSignalRecord<MacroComparisonSnapshot>({
+    await upsertCachedSignalRecord<MacroComparisonSnapshot>({
       slug: 'macro-comparison',
       area,
       payload: fresh,
