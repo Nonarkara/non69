@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import type L_Type from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { SATELLITE_OVERLAYS, getOverlayUrl } from '@/lib/satellite-overlays';
 import { getBestGibsDate, getBest8DayDate } from '@/lib/satellite-freshness';
 
@@ -53,7 +54,6 @@ export default function BangkokMap({
 
     (async () => {
       const L = (await import('leaflet')).default;
-      await import('leaflet/dist/leaflet.css');
 
       if (cancelled || !mapRef.current) return;
 
