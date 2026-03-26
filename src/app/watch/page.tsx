@@ -7,6 +7,7 @@ import CommandHeader from '@/components/dashboard/CommandHeader';
 import MorningBrief from '@/components/dashboard/MorningBrief';
 import SatelliteMapController from '@/components/dashboard/SatelliteMapController';
 import DataThroughput from '@/components/dashboard/DataThroughput';
+import LiveTVPanel from '@/components/dashboard/LiveTVPanel';
 import NewsFeed from '@/components/dashboard/NewsFeed';
 import NonismFeed from '@/components/dashboard/NonismFeed';
 import PlatformPulsePanel from '@/components/dashboard/PlatformPulse';
@@ -295,14 +296,14 @@ export default async function WatchPage({
 
             {/* RIGHT SIDEBAR — 360px: Brief + Analysis + News + Clocks + Trends + Env */}
             <div className="w-[360px] shrink-0 flex flex-col gap-[2px] overflow-hidden">
-              {/* Morning brief — 35% */}
-              <div style={{ flex: '3.5 1 0%' }} className="min-h-0">
-                <MorningBrief />
+              {/* Live TV — 40% */}
+              <div style={{ flex: '4 1 0%' }} className="min-h-0">
+                <LiveTVPanel />
               </div>
 
-              {/* Analysis terminal — 25% */}
+              {/* Morning brief + Analysis — 25% */}
               <div style={{ flex: '2.5 1 0%' }} className="min-h-0">
-                <AnalysisPanel />
+                <MorningBrief />
               </div>
 
               {/* News feed — 25% */}
