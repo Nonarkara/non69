@@ -69,11 +69,13 @@ export default function Nav() {
     router.refresh();
   }
 
+  const isCockpit = pathname === '/watch' || pathname === '/cockpit';
+
   return (
-    <nav className="border-b border-neutral-800 bg-black/95 backdrop-blur">
-      <div className="max-w-6xl mx-auto px-4 min-h-14 py-3 flex items-center justify-between gap-4">
+    <nav className={`border-b bg-black/95 backdrop-blur ${isCockpit ? 'border-green-900/20' : 'border-neutral-800'}`}>
+      <div className={`mx-auto flex items-center justify-between gap-4 ${isCockpit ? 'px-3 py-1' : 'max-w-6xl px-4 min-h-14 py-3'}`}>
         <div className="flex items-center gap-1 flex-wrap">
-          {links.map(link => {
+          {!isCockpit && links.map(link => {
             const isActive = pathname === link.href;
             const isHome = link.href === '/';
             return (
