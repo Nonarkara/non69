@@ -303,7 +303,11 @@ export default async function WatchPage({
 
               {/* Morning brief + Analysis — 25% */}
               <div style={{ flex: '2.5 1 0%' }} className="min-h-0">
-                <MorningBrief />
+                <MorningBrief
+                  fallbackHeadline={bundle.brief.headline}
+                  fallbackSummary={bundle.brief.summary}
+                  fallbackWatchouts={bundle.brief.watchouts}
+                />
               </div>
 
               {/* News feed — 25% */}

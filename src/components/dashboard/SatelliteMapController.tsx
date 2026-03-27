@@ -13,7 +13,7 @@ export default function SatelliteMapController({
   satellite = true,
   signalStatuses,
 }: SatelliteMapControllerProps) {
-  const [activeOverlays, setActiveOverlays] = useState<string[]>([]);
+  const [activeOverlays, setActiveOverlays] = useState<string[]>(['viirs-true-color']);
   const [showPanel, setShowPanel] = useState(true);
 
   const handleToggle = useCallback((id: string) => {

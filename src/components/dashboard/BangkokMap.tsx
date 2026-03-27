@@ -186,9 +186,11 @@ export default function BangkokMap({
         ref={mapRef}
         className="absolute inset-0"
         style={{
-          filter: satellite && activeOverlays.length === 0
-            ? 'saturate(0.4) brightness(0.85) contrast(1.1) hue-rotate(80deg)'
-            : 'none',
+          filter: activeOverlays.length > 0
+            ? 'saturate(0.5) brightness(0.9) contrast(1.1)'
+            : satellite
+              ? 'saturate(0.3) brightness(0.6) contrast(1.2) hue-rotate(80deg)'
+              : 'none',
         }}
       />
       <style>{`
