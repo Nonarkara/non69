@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { cookies } from 'next/headers';
 import jwt from 'jsonwebtoken';
 import type { NextRequest } from 'next/server';
-import { getClient } from './db';
+import { ensureDb, getClient } from './db';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'non69-dev-secret-change-in-production';
 export const AUTH_COOKIE_NAME = 'drnon_session';
@@ -49,6 +49,7 @@ function mapUserRow(row: Record<string, unknown> | null | undefined): User | nul
 }
 
 export async function createUser(email: string, password: string, displayName: string): Promise<User> {
+  await ensureDb();
   const c = getClient();
   const { rows: existingRows } = await c.execute({
     sql: 'SELECT id FROM users WHERE email = ?',
@@ -87,6 +88,7 @@ export async function createUser(email: string, password: string, displayName: s
 }
 
 export async function authenticateUser(email: string, password: string): Promise<User | null> {
+  await ensureDb();
   const { rows } = await getClient().execute({
     sql: `SELECT
            id,

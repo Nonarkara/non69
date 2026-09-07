@@ -1,8 +1,15 @@
 # DrNon — Thailand Watch Intelligence Dashboard
 
-**A satellite-powered civic intelligence platform built by Dr. Non Arkara.**
+[![License: MIT](https://img.shields.io/badge/license-MIT-1A1A1A)](LICENSE)
+[![Next.js](https://img.shields.io/badge/Next.js-16-1A1A1A)](package.json)
+
+**A satellite-powered civic intelligence platform built by [Non Arkaraprasertkul](https://github.com/Nonarkara) / [Axiom X Co., Ltd.](https://axiom.nonarkara.org).**
 
 Live: [non69.onrender.com](https://non69.onrender.com)
+
+This repository is **independent studio software**. It is not an official product of Thailand's Digital Economy Promotion Agency (depa), NASA, Anthropic, or any Thai ministry or municipality. Affiliation, day jobs, and public talks do not make this GitHub project an agency system.
+
+[Clone → env → run](#clone--env--run) · [Philosophy](#philosophy) · [Ethical use](#ethical-use) · [How it works](#how-it-works) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [License](#license)
 
 ---
 
@@ -11,6 +18,113 @@ Live: [non69.onrender.com](https://non69.onrender.com)
 DrNon is a real-time intelligence dashboard that monitors Thailand's civic infrastructure — air quality, heat stress, flood risk, transit, safety, and public service reliability — through curated signals, satellite imagery, live environmental data, and Claude-powered analysis.
 
 It is not a news aggregator. It is not a data dump. It is an **intelligence product** — every signal is curated by a domain expert, every analysis is synthesized by Claude Opus, and every prediction is tracked for accountability.
+
+---
+
+## Philosophy
+
+The in-app manifesto lives at [`/philosophy`](https://non69.onrender.com/philosophy). The short version for a stranger cloning this repo:
+
+- **Cities are for people, not prestige.** Start from lived friction — air, heat, floods, transit, broken service — not vanity metrics.
+- **Policy without product is theater.** A working dashboard argues harder than a slide deck.
+- **Open source or shut up.** If a public-interest system cannot be rebuilt after a breach or a political tantrum, it is not serious.
+- **Two root problems.** Miscommunication and illogical thinking. Every analysis is filtered through that lens.
+
+Nonisms on the dashboard are decision fragments, not decorative quotes:
+
+> *"The power of logic is limitless. Sometimes the will alone cannot save you from yourself, but the power of logic will."*
+
+> *"We could live in a much better world if we can solve two problems: miscommunication and illogical thinking."*
+
+---
+
+## Ethical use
+
+**Do**
+
+- Treat Watch signals as **curated intelligence**, not official alerts. Cross-check TMD, DDPM, Air4Thai, police, and city channels before you act.
+- Label AI output as synthesized analysis. Claude correlates context; it does not speak for the Thai state.
+- Keep NASA GIBS, Open-Meteo, STAC, and RSS attribution visible when you fork the map or feeds.
+- Put operator keys only in `.env.local`. Copy [`.env.local.example`](.env.local.example). Never commit secrets.
+
+**Do not**
+
+- Present this repo or the Render URL as an official depa, Smart City Thailand, NASA, or municipal operations system.
+- Ship a fork that only boots if a stranger pastes your API key.
+- Treat morning briefs, predictions, or meeting-mode notes as legal, medical, or emergency authority.
+- Commit `.env`, `.env.local`, tokens, session cookies, or production databases.
+
+If a change would only work by pasting a secret, it does not belong here.
+
+---
+
+## How it works
+
+```mermaid
+flowchart TB
+  subgraph public [Public sources — no repo secrets]
+    GIBS[NASA GIBS overlays]
+    STAC[Planetary Computer STAC]
+    Meteo[Open-Meteo air + weather]
+    RSS[Public news RSS]
+  end
+  subgraph local [This app]
+    SQLite[Local SQLite / optional Turso]
+    Watch[Thailand Watch signals]
+    UI[Next.js dashboard]
+  end
+  subgraph optional [Your keys — optional]
+    Claude[Anthropic Claude]
+    OpenAI[OpenAI transcribe]
+  end
+  public --> UI
+  SQLite --> Watch --> UI
+  Claude -.-> UI
+  OpenAI -.-> UI
+```
+
+| Layer | Default on a fresh clone |
+|-------|--------------------------|
+| Watch UI, seed signals, Nonisms | Local SQLite (`file:db/non69.db`) — no key |
+| Maps + satellite overlays | NASA GIBS / Leaflet — public tiles |
+| Live air + weather | Open-Meteo — public API |
+| News ticker | Public RSS |
+| Analysis terminal, morning brief, Think / Communicate / Reflect, Challenge, Arena, Simulate | Needs **your** `ANTHROPIC_API_KEY` |
+| Meeting transcription | Needs **your** `OPENAI_API_KEY` |
+
+---
+
+## Clone → env → run
+
+No secrets are required to browse Thailand Watch.
+
+```bash
+git clone https://github.com/Nonarkara/non69.git
+cd non69
+npm install
+cp .env.local.example .env.local
+npm run seed
+npm run dev
+```
+
+Open [http://localhost:3000/watch](http://localhost:3000/watch).
+
+Leave `.env.local` empty to use the curated signals, map overlays, Open-Meteo, and RSS. Add `ANTHROPIC_API_KEY` only if you want Claude analysis and practice tools. First page load also initializes an empty local database if you skipped `npm run seed`.
+
+Node 20+ recommended. Do not copy anyone else's keys into this file.
+
+## Environment Variables
+
+Names only. Values stay on your machine.
+
+| Variable | Required to browse Watch? | Description |
+|----------|---------------------------|-------------|
+| `ANTHROPIC_API_KEY` | No | Claude API key for analysis, briefs, and practice tools |
+| `ANTHROPIC_MODEL` | No | Optional model override (default Claude Opus) |
+| `OPENAI_API_KEY` | No | Meeting transcription / search helpers |
+| `JWT_SECRET` | No locally | Auth token secret; set a long random value before production |
+| `TURSO_DATABASE_URL` | No | Hosted LibSQL URL; default is `file:db/non69.db` |
+| `TURSO_AUTH_TOKEN` | No | Turso auth token, only with a hosted URL |
 
 ---
 
@@ -52,7 +166,7 @@ WorldMonitor monitors 195 countries across 15 categories. The result: it knows n
 
 DrNon monitors **Thailand's 77 provinces** with the depth of someone who has managed 120+ smart city projects across every one of them. The creator (Dr. Non Arkara) is a Senior Expert at Thailand's Digital Economy Promotion Agency, a Harvard-trained anthropologist, and an MIT-trained architect. The signals aren't scraped from RSS — they're curated by someone who understands why Bangkok's civic complaint system breaks down in high-density districts and how PM2.5 correlates with agricultural burning cycles in the central plains.
 
-One country monitored by an expert beats 195 countries monitored by a scraper.
+One country monitored by an expert beats 195 countries monitored by a scraper. That day job is context for the curation, **not** a claim that this repo is a depa product.
 
 ### 5. WorldMonitor Is Passive. DrNon Has Action Tools.
 
@@ -75,7 +189,7 @@ WorldMonitor uses map layers for visualization — military bases, submarine cab
 
 DrNon integrates **12 NASA GIBS satellite overlays** (VIIRS True Color, MODIS imagery, fire/thermal detection, precipitation, aerosol optical depth, vegetation index, sea surface temperature, night lights) — all toggleable in real-time on an interactive map. It also queries the **STAC catalog** (Microsoft Planetary Computer) for the latest Sentinel-2 and Landsat imagery, with cloud cover filtering and freshness scoring.
 
-Satellite data isn't decoration. It's ground truth that validates or contradicts every other signal.
+Satellite data isn't decoration. It's ground truth that validates or contradicts every other signal. NASA imagery does not make this an official NASA product.
 
 ### 7. WorldMonitor Has No Morning Brief.
 
@@ -94,15 +208,7 @@ You wake up to intelligence, not information.
 
 ### 8. WorldMonitor Has No Philosophy.
 
-WorldMonitor is a tool. DrNon is a manifesto.
-
-The dashboard surfaces **Nonisms** — philosophical fragments from Dr. Non's 123 published essays on logic, communication, failure, design thinking, and minimalism. These aren't decorative quotes. They're decision-making frameworks:
-
-> *"The power of logic is limitless. Sometimes the will alone cannot save you from yourself, but the power of logic will."*
-
-> *"We could live in a much better world if we can solve two problems: miscommunication and illogical thinking."*
-
-A dashboard without philosophy is just a screen. A dashboard with philosophy is a way of seeing.
+WorldMonitor is a tool. DrNon is a manifesto. A dashboard without philosophy is just a screen. A dashboard with philosophy is a way of seeing.
 
 ---
 
@@ -114,7 +220,7 @@ A dashboard without philosophy is just a screen. A dashboard with philosophy is 
 | Maps | Leaflet + NASA GIBS WMTS + ArcGIS Satellite |
 | Satellite | STAC (Planetary Computer), 12 GIBS overlays |
 | AI | Claude Opus 4.6 (Anthropic SDK), streaming SSE |
-| Database | SQLite (better-sqlite3) with WAL mode |
+| Database | SQLite via LibSQL (`better` local file or optional Turso) |
 | Live Data | Open-Meteo (air quality, weather), RSS feeds |
 | Auth | JWT + bcrypt, cookie-based sessions |
 | Deployment | Render (web service) |
@@ -134,33 +240,24 @@ A dashboard without philosophy is just a screen. A dashboard with philosophy is 
 - **Watch Ops** — Revision history, publish/rollback, freshness tracking
 - **Share Engine** — Share signals and briefs to X, LinkedIn, or clipboard
 
-## Getting Started
-
-```bash
-npm install
-cp .env.local.example .env.local  # Add your ANTHROPIC_API_KEY
-npm run dev
-```
-
-Open [http://localhost:3000/watch](http://localhost:3000/watch) for the intelligence dashboard.
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | Claude API key for analysis and briefs |
-| `JWT_SECRET` | Auto-generated | Secret for auth tokens |
-
 ## The Person Behind This
 
-**Dr. Non Arkaraprasertkul, PhD**
+**Dr. Non Arkaraprasertkul, PhD** — [Axiom X Co., Ltd.](https://axiom.nonarkara.org), Bangkok
 - Harvard (Anthropology), MIT (Architecture), Oxford (Modern Chinese Studies)
 - Senior Expert, Smart City Promotion — Thailand's Digital Economy Promotion Agency (depa)
 - 120+ tech projects across all 77 Thai provinces
 - Keynote speaker at 100+ global forums
 - Life mission: solve miscommunication and illogical thinking at scale
 
-This is not a side project. This is the operating system for a life's work.
+This is not a side project. This is the operating system for a life's work — published here as independent software, not as an agency release.
+
+---
+
+## License
+
+MIT — Copyright (c) 2026 Non Arkaraprasertkul / Axiom X Co., Ltd. See [LICENSE](LICENSE).
+
+Contributions: [CONTRIBUTING.md](CONTRIBUTING.md). Vulnerabilities: [SECURITY.md](SECURITY.md).
 
 ---
 

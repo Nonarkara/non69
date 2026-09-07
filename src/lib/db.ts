@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 let client: Client | undefined;
+let ready: Promise<void> | null = null;
 
 export function getClient(): Client {
   if (!client) {
@@ -12,6 +13,14 @@ export function getClient(): Client {
     });
   }
   return client;
+}
+
+/** Idempotent schema + seed so a fresh clone can `npm run dev` without secrets. */
+export function ensureDb(): Promise<void> {
+  if (!ready) {
+    ready = initDb();
+  }
+  return ready;
 }
 
 export type ConversationMode = 'think' | 'communicate' | 'reflect';
@@ -1216,6 +1225,7 @@ export interface PlatformPulse {
 }
 
 export async function getPlatformPulse(): Promise<PlatformPulse> {
+  await ensureDb();
   const c = getClient();
 
   const countTable = async (table: string) => {
@@ -1294,10 +1304,12 @@ export async function getPracticeStats(): Promise<{ totalRuns: number; avgScore:
 }
 
 export async function getWatchBundle(geography: string): Promise<WatchBundle | null> {
+  await ensureDb();
   return getWatchBundleFromDb(getClient(), geography);
 }
 
 export async function listWatchRevisions(geography: string): Promise<WatchRevisionSummary[]> {
+  await ensureDb();
   const { rows } = await getClient().execute({
     sql: `SELECT
          wr.id,
