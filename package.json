@@ -2,11 +2,13 @@
   "name": "non69",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "seed": "npx --yes tsx db/seed.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
